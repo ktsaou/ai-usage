@@ -23,12 +23,13 @@ export function metric(
   total: number | null,
   unit: string,
   window: string | null = null,
-  resetsAt: number | null = null
+  resetsAt: number | null = null,
+  extra: { note?: string; breakdown?: Record<string, number> } = {}
 ): UsageMetric {
   const remaining = used !== null && total !== null ? total - used : null;
   const percent =
     used !== null && total !== null && total > 0
       ? Math.max(0, Math.min(100, (used / total) * 100))
       : null;
-  return { name, used, total, remaining, percent, unit, window, resetsAt };
+  return { name, used, total, remaining, percent, unit, window, resetsAt, ...extra };
 }

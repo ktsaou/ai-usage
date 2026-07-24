@@ -7,6 +7,10 @@ export interface UsageMetric {
   unit: string;
   window: string | null;
   resetsAt: number | null;
+  /** What this quota actually measures, when the name alone invites misreading. */
+  note?: string;
+  /** Per-item split of `used`, when the provider reports one. */
+  breakdown?: Record<string, number>;
 }
 
 export interface ProviderResult {

@@ -16,12 +16,19 @@ Response `data.limits[]`, plus `data.level` (plan, e.g. `max`).
 
 | API entry | Metric | Unit | Window | Notes |
 |---|---|---|---|---|
-| `TIME_LIMIT`, `unit: 5` | `monthly_mcp` | `requests` | monthly | Real counts: `currentValue`=used, `remaining`, total=`usage` (e.g. 111/4000). `percentage` = percent **used**. Reset = `nextResetTime`. |
+| `TIME_LIMIT`, `unit: 5` | `monthly_mcp` | `tool calls` | monthly | Real counts: `currentValue`=used, `remaining`, total=`usage` (e.g. 111/4000). `percentage` = percent **used**. Reset = `nextResetTime`. |
 | `TOKENS_LIMIT`, `unit: 3` | `5h_quota` | `%` | 5h | Percentage only — no raw counts. `percentage` = percent **used**. Reset = `nextResetTime`. |
 | `TOKENS_LIMIT`, `unit: 6` | `weekly_quota` | `%` | weekly | **Not returned on current plans — the weekly bucket is unlimited.** Parser supports it but emits nothing. |
 
 `percentage` means percent-used (confirmed: the MCP entry reports `percentage: 2`
 alongside 111/4000 = 2.8% used).
+
+**`monthly_mcp` counts hosted tool calls, not model usage.** The entry carries a
+`usageDetails[]` split by `modelCode` — observed values `search-prime`,
+`web-reader` and `zread`, summing exactly to `currentValue`. That breakdown is
+emitted as the metric's `breakdown`, and both z.ai metrics carry a `note`
+saying which one is tool calls and which one is model/LLM usage, because
+consumers were reading the monthly tool-call quota as remaining LLM calls.
 
 ## MiniMax (`type: minimax`)
 
@@ -142,6 +149,13 @@ the console does not redirect when logged out.
 ## Cross-cutting rendering
 
 - **MCP percent metrics**: `N% used, M% remaining resets <RFC3339> (in <countdown>)`.
+- **Metric self-description**: a metric may carry `note` (what the quota
+  actually measures) and `breakdown` (per-item split of `used`). The MCP renders
+  them as indented `what this measures:` and `breakdown:` lines under the
+  metric. Add a `note` whenever a metric name or unit could be misread as
+  something else — the MCP output is consumed by assistants that otherwise
+  infer meaning from the name alone. Neither field is stored in SQLite or
+  exported to Prometheus; both are descriptive, not historical.
 - **MCP countdown** (`resets in …`): units descend `d h m s`; **days is the
   largest unit (no months)**; zero units trimmed; `now` when <= 0. Lifetime
   balances (no reset) show no countdown.

@@ -74,18 +74,30 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         const rfc = toRfc3339(m.resetsAt);
         const cd = typeof m.resetsAt === "number" ? countdown(m.resetsAt - Date.now()) : null;
         const reset = rfc ? ` resets ${rfc}${cd ? ` (in ${cd})` : ""}` : "";
+
+        // Callers otherwise guess what a quota measures from its name alone.
+        const extra: string[] = [];
+        if (m.note) extra.push(`      what this measures: ${m.note}`);
+        if (m.breakdown && Object.keys(m.breakdown).length > 0) {
+          const parts = Object.entries(m.breakdown)
+            .map(([k, v]) => `${k} ${Number(v).toLocaleString()}`)
+            .join(", ");
+          extra.push(`      breakdown: ${parts}`);
+        }
+        const suffix = extra.length > 0 ? `\n${extra.join("\n")}` : "";
+
         if (m.unit === "%") {
-          return `  ${m.name} [${m.window || "n/a"}]: ${m.used}% used, ${m.remaining}% remaining${reset}`;
+          return `  ${m.name} [${m.window || "n/a"}]: ${m.used}% used, ${m.remaining}% remaining${reset}${suffix}`;
         }
         const unit = m.unit ? ` ${m.unit}` : "";
         if (m.used === null && m.remaining === null && m.total !== null) {
-          return `  ${m.name} [${m.window || "n/a"}]: ${m.total.toLocaleString()}${unit} available${reset}`;
+          return `  ${m.name} [${m.window || "n/a"}]: ${m.total.toLocaleString()}${unit} available${reset}${suffix}`;
         }
         const pct = m.percent !== null ? ` (${m.percent.toFixed(1)}%)` : "";
         const used = m.used !== null ? m.used.toLocaleString() : "?";
         const total = m.total !== null ? m.total.toLocaleString() : "?";
         const remaining = m.remaining !== null ? m.remaining.toLocaleString() : "?";
-        return `  ${m.name} [${m.window || "n/a"}]: ${used}/${total} used, ${remaining} remaining${unit}${pct}${reset}`;
+        return `  ${m.name} [${m.window || "n/a"}]: ${used}/${total} used, ${remaining} remaining${unit}${pct}${reset}${suffix}`;
       });
       const head = `${data.name} (${data.providerType})${data.plan ? " — plan " + data.plan : ""}`;
       return {

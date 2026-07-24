@@ -24,7 +24,11 @@ async function fetchZai(config: ProviderConfig): Promise<ProviderResult> {
       // Token-plan buckets expose only a `percentage` (percent used), no raw counts.
       const window = limit.unit === 3 ? "5h" : "weekly";
       if (typeof limit.percentage === "number") {
-        metrics.push(metric(`${window}_quota`, limit.percentage, 100, "%", window, limit.nextResetTime ?? null));
+        metrics.push(
+          metric(`${window}_quota`, limit.percentage, 100, "%", window, limit.nextResetTime ?? null, {
+            note: "model/LLM usage on the coding plan (prompt and completion tokens)",
+          })
+        );
       }
     } else if (limit.type === "TIME_LIMIT" && limit.unit === 5) {
       const mcpUsed = limit.currentValue ?? 0;
@@ -32,7 +36,18 @@ async function fetchZai(config: ProviderConfig): Promise<ProviderResult> {
         limit.currentValue != null && limit.remaining != null
           ? limit.currentValue + limit.remaining
           : limit.usage ?? 0;
-      metrics.push(metric("monthly_mcp", mcpUsed, mcpTotal, "requests", "monthly", limit.nextResetTime ?? null));
+      // `usageDetails` names the tools consuming this quota (e.g. search-prime,
+      // web-reader, zread), proving it counts hosted tool calls, not model usage.
+      const breakdown: Record<string, number> = {};
+      for (const d of limit.usageDetails || []) {
+        if (d?.modelCode) breakdown[d.modelCode] = Number(d.usage) || 0;
+      }
+      metrics.push(
+        metric("monthly_mcp", mcpUsed, mcpTotal, "tool calls", "monthly", limit.nextResetTime ?? null, {
+          note: "z.ai-hosted MCP tool calls (web search, web reader, zread) — NOT model/LLM requests or tokens",
+          ...(Object.keys(breakdown).length > 0 ? { breakdown } : {}),
+        })
+      );
     }
   }
   return result(config, metrics, body.data.level || null);
