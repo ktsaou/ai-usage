@@ -1,0 +1,30 @@
+{
+  "name": "ai-usage",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "agent": "tsx src/agent/main.ts",
+    "mcp": "tsx src/mcp.ts",
+    "login": "tsx src/login.ts",
+    "sync:profile": "bash scripts/sync-profile.sh",
+    "test:all": "tsx src/test-all.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^16.4.0",
+    "hono": "^4.6.0",
+    "patchright": "^1.61.1",
+    "playwright": "^1.61.1",
+    "tsx": "^4.19.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}

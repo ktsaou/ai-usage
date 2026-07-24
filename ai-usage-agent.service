@@ -1,0 +1,17 @@
+[Unit]
+Description=AI Usage Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/npx tsx %h/src/ai-usage.git/src/agent/main.ts
+WorkingDirectory=%h/src/ai-usage.git
+Environment=AI_USAGE_DAEMON_URL=http://YOUR_DAEMON_HOST:9199
+Environment=AI_USAGE_INGEST_KEY=YOUR_INGEST_KEY
+Environment=AI_USAGE_AGENT_NAME=YOUR_AGENT_NAME
+Environment=AI_USAGE_AGENT_INTERVAL=60
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

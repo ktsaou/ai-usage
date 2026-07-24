@@ -1,0 +1,13 @@
+[Unit]
+Description=AI Usage Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/npx tsx %h/src/ai-usage.git/src/main.ts
+WorkingDirectory=%h/src/ai-usage.git
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

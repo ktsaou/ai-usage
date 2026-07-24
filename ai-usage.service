@@ -1,0 +1,36 @@
+[Unit]
+Description=AI Usage Monitor Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ai-usage
+Group=ai-usage
+WorkingDirectory=/opt/ai-usage
+ExecStart=/opt/ai-usage/node_modules/.bin/tsx src/main.ts
+Restart=on-failure
+RestartSec=5
+# Signal only the daemon on stop, not the whole cgroup: it has to read the
+# browser's session cookies before chromium dies, or a restart falls back to
+# stale ones. Leftovers are still killed after TimeoutStopSec.
+KillMode=mixed
+TimeoutStopSec=25
+Environment=NODE_ENV=production
+# Browser-session providers (mimo, alibaba) poll through a logged-in chromium
+# profile installed under the service user's own home.
+Environment=HOME=/opt/ai-usage
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ai-usage/.cache/ms-playwright
+Environment=AI_USAGE_BROWSER_DIR=/opt/ai-usage/browser/profile
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+# The profile must stay writable: these sites rotate session cookies, and a
+# read-only profile loses the session within hours.
+ReadWritePaths=/opt/ai-usage/data /opt/ai-usage/browser
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

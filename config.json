@@ -1,0 +1,72 @@
+{
+  "service": {
+    "name": "${AI_USAGE_SERVICE_NAME}",
+    "tagline": "${AI_USAGE_SERVICE_TAGLINE}"
+  },
+  "port": 9199,
+  "pollIntervalSeconds": 60,
+  "dbPath": "./data/ai-usage.db",
+  "providers": [
+    {
+      "id": "zai",
+      "type": "zai",
+      "name": "Z.AI Max",
+      "env": { "apiKey": "ZAI_API_KEY" }
+    },
+    {
+      "id": "minimax",
+      "type": "minimax",
+      "name": "MiniMax Token Plan",
+      "env": { "subscriptionKey": "MINIMAX_SUBSCRIPTION_KEY", "region": "MINIMAX_REGION" }
+    },
+    {
+      "id": "kimi",
+      "type": "kimi",
+      "name": "Kimi Coding",
+      "env": { "apiKey": "KIMI_CODING_API_KEY" }
+    },
+    {
+      "id": "mimo",
+      "type": "mimo",
+      "name": "MiMo Max",
+      "env": {},
+      "playwright": true
+    },
+    {
+      "id": "alibaba-coding",
+      "type": "alibaba-coding",
+      "name": "Alibaba Coding Pro",
+      "env": {},
+      "playwright": true
+    },
+    {
+      "id": "alibaba-token",
+      "type": "alibaba-token",
+      "name": "Alibaba Token Pro",
+      "env": {},
+      "playwright": true
+    },
+    {
+      "id": "deepseek",
+      "type": "deepseek",
+      "name": "DeepSeek Balance",
+      "payg": "balance",
+      "balanceWarnDays": 7,
+      "balanceCritDays": 2,
+      "env": { "apiKey": "DEEPSEEK_API_KEY" }
+    },
+    {
+      "id": "openrouter",
+      "type": "openrouter",
+      "name": "OpenRouter",
+      "payg": "spend",
+      "spendWindowDays": 7,
+      "env": { "apiKey": "OPENROUTER_API_KEY" }
+    }
+  ],
+  "ingest": {
+    "apiKeys": {
+      "agent1": "${INGEST_API_KEY_1}"
+    }
+  }
+}
