@@ -6,6 +6,9 @@ Status: completed
 
 Sub-state: all three browser-session providers report live data from the daemon host and survive a service restart. 8/8 providers healthy.
 
+Reopened 2026-07-26 for a regression (browser tabs never recovered from a failed
+load) and re-completed the same day; see `## Regression - 2026-07-26`.
+
 ## Requirements
 
 ### Purpose
@@ -513,4 +516,128 @@ again.
 
 ## Regression Log
 
-None yet.
+- 2026-07-26: browser tabs never recovered from a failed load. Reopened, fixed
+  and re-completed the same day; see `## Regression - 2026-07-26` below.
+
+## Regression - 2026-07-26
+
+### What broke
+
+After the daemon host was rebooted, `alibaba-coding` reported
+`page.evaluate: SecurityError: Failed to read the 'cookie' property from
+'Document': Access is denied for this document.` on every poll and never
+recovered. A later host failure produced the same state on both alibaba
+providers at once. Only a service restart cleared it, so this SOW's claim that
+the browser providers keep working across restarts held only when the network
+was already up at start.
+
+### Evidence
+
+Journal from the daemon host, first poll after boot:
+
+```
+12:11:27 mimo:           ERROR page.goto: net::ERR_NETWORK_CHANGED
+12:11:27 alibaba-coding: ERROR page.goto: net::ERR_NETWORK_CHANGED
+12:11:31 alibaba-token:  2 metrics stored
+12:12:26 alibaba-coding: ERROR page.evaluate: SecurityError ...   (every 60s after)
+12:12:29 mimo:           1 metrics stored
+```
+
+- The host's network was still settling when the service started, so the first
+  navigation of each tab failed. `ai-usage.service` already orders itself
+  `After=/Wants=network-online.target`; `ERR_NETWORK_CHANGED` means the network
+  configuration changed *during* the request, which ordering cannot prevent.
+- mimo recovered because `src/providers/mimo.ts` checks the tab's origin before
+  calling the API, reports a logged-out state, and that forces a re-navigation.
+  The alibaba path reads `document.cookie` for `sec_token` as its first act
+  (`src/providers/alibaba.ts:23`), so it threw before any recovery logic ran.
+- The deployed `src/providers/browser.ts` was byte-identical to the committed
+  version (md5 compared on both sides), so the existing
+  `page.url() === "about:blank"` re-navigation check was active and still did
+  not fire.
+
+Root cause, established by direct probe of every navigation-failure class
+(fresh tab vs. after a good load; DNS failure, connection refused, timeout,
+reset after commit):
+
+| failure | `page.url()` | real `location.href` | `document.cookie` |
+|---|---|---|---|
+| fresh tab, DNS/refused/timeout | `about:blank` | `chrome-error://chromewebdata/` | throws |
+| **after a good load, nav fails** | **the previous good URL** | `chrome-error://chromewebdata/` | **throws** |
+| reset after commit | the target URL | the target URL | works |
+
+`page.url()` reports the last URL the automation library saw committed, not what
+the document actually is. In the second row it names a URL that looks perfectly
+healthy while the document is an opaque-origin error page — which is why the
+`about:blank` check could never fire, and why the tab stayed poisoned forever.
+
+### Why previous validation missed it
+
+Validation covered `systemctl restart` with a working network, never a start
+during a network fault. Nothing in the design distinguished "tab is on the right
+URL" from "tab holds a usable document", and the only symptom is a provider
+error that looks like an ordinary session problem.
+
+### Repair
+
+`src/providers/browser.ts` no longer trusts the URL. `getPage` asks the document
+itself — `document.cookie` (the capability every provider needs, which throws on
+an opaque origin) plus `location.origin` — and re-navigates the tab whenever that
+check fails. One cheap `evaluate` per poll; healthy tabs are still never
+reloaded, so polls remain XHRs as decided in Implications And Decisions item 5.
+
+### Validation
+
+- Deterministic reproduction, no credentials: a local server plus a dead
+  hostname reproduce both failure shapes. 10/10 checks pass against the fixed
+  module, including "page.url() still reports the OLD good URL" (the production
+  case), "self-heals despite the misleading URL", and "no re-navigation of a
+  healthy tab". Confirmed the same test fails on the old logic path by
+  observation of the same stuck state in production.
+- Same test run **on the daemon host, as the service user**, against the
+  installed module and the production chromium: all checks pass. A service
+  restart alone would have hidden the bug, so the fix was proven before the
+  restart, not by it.
+- `npx tsc --noEmit` clean.
+- Real use: with both alibaba providers stuck, the fix was installed and the
+  service restarted — 8/8 providers healthy (`alibaba-coding` 3 metrics, plan
+  `Coding Plan Pro`; `alibaba-token` 2 metrics, plan `pro`), and zero error
+  lines in the journal since start.
+- The saved session survived the host failure (34 session cookies, alibaba login
+  cookies present, file rewritten minutes before), so no re-login was needed —
+  the session mechanism from the original SOW was not implicated.
+- Same-failure search: `page.url()` is used in one other place,
+  `src/providers/mimo.ts:18`, as a logged-out *detector* rather than a
+  reuse decision. It stays: it is now redundant for the error-page case but is
+  still the signal that mimo has been redirected away mid-poll. No other code
+  reuses a page, client or connection across polls without rebuilding it.
+- Sensitive data gate: cookie evidence recorded as names and domains only; no
+  values, no host names, no account identifiers.
+
+### Artifact updates
+
+- `AGENTS.md`: new invariant (a tab is reusable only while its document is
+  usable — never decide that from the reported URL) and two debugging rules
+  (transient network faults become permanent bugs without per-poll recovery;
+  reproduce deterministically, because a restart clears the symptom either way).
+- Spec `provider-quota-semantics.md`: browser-session section now states the
+  tab-reuse rule and its recovery behaviour.
+- Runtime project skills: still none. The knowledge is an invariant plus a
+  debugging rule, both of which belong in `AGENTS.md` where they are already
+  read before touching browser code; a skill would duplicate it.
+- End-user/operator docs: unaffected — the operator flow (`npm run login`,
+  `npm run sync:profile`) does not change, and this failure needed no operator
+  action.
+
+### Lessons
+
+- An automation library's idea of "the current URL" is bookkeeping, not a fact
+  about the document. Check the capability the code actually needs.
+- Recovery logic that lives in one provider is not a design. mimo survived and
+  alibaba did not, purely because one of them happened to check its origin
+  first; the check belonged in the shared layer all along.
+- A restart hides this entire class of bug, so "it works after a restart" proves
+  nothing. Reproduce the broken state deterministically, then fix it.
+- The first diagnosis (re-navigate when the tab is not on the target origin) was
+  wrong and would have shipped a fix that never fired. It was caught only by
+  running the reproduction, which showed `page.url()` reporting a healthy URL.

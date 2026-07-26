@@ -123,6 +123,34 @@ async function getContext(): Promise<BrowserContext> {
   return contextPromise;
 }
 
+/**
+ * Whether the tab really holds a usable document on `origin`.
+ *
+ * `page.url()` cannot answer this: it reports the last URL playwright saw
+ * committed, so a navigation that fails after commit (the network changing
+ * under the browser while the host boots) leaves it reporting the target URL
+ * while the live document is chromium's error page — `location.href` is
+ * `chrome-error://chromewebdata/` and the origin is opaque. Every provider then
+ * throws `SecurityError` on its first cookie read, forever, because nothing
+ * re-navigates a tab whose URL looks correct.
+ *
+ * So ask the document itself, testing the capability the callers need.
+ */
+async function usable(page: Page, origin: string): Promise<boolean> {
+  try {
+    return await page.evaluate((want) => {
+      try {
+        void document.cookie; // throws on an opaque (error page / blank) origin
+        return location.origin === want;
+      } catch {
+        return false;
+      }
+    }, origin);
+  } catch {
+    return false; // closed or crashed renderer
+  }
+}
+
 /** A tab dedicated to one provider, parked on `url`. Re-navigates if `force`. */
 export async function getPage(key: string, url: string, force = false): Promise<Page> {
   const ctx = await getContext();
@@ -136,12 +164,13 @@ export async function getPage(key: string, url: string, force = false): Promise<
   if (!page || page.isClosed()) {
     page = await ctx.newPage();
     pages.set(key, page);
-    force = true;
   }
 
   // Navigate once per tab: the console SPA only has to bootstrap the session,
-  // after which polls are same-origin XHRs from the already-open page.
-  if (force || page.url() === "about:blank") {
+  // after which polls are same-origin XHRs from the already-open page. Anything
+  // that left the tab without a usable document on the target origin gets it
+  // re-navigated, which is what makes a failed load self-healing.
+  if (force || !(await usable(page, new URL(url).origin))) {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForTimeout(2000);
   }

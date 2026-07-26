@@ -86,6 +86,15 @@ polled through a shared logged-in chromium profile (`src/providers/browser.ts`):
 one persistent context, one tab per provider, each tab navigated once and then
 reused, so a poll is a same-origin XHR rather than a page load.
 
+A tab is reused only while it still holds a usable document on the console
+origin, which each poll checks by reading `document.cookie` and `location.origin`
+inside the page. Anything else — a load that failed while the host's network was
+still settling, a crashed renderer, a redirect elsewhere — is re-navigated on the
+next poll, so a transient network fault costs one poll instead of requiring a
+service restart. The tab's reported URL is not used for this decision: a
+navigation that fails after commit leaves it reporting the target URL while the
+document is the browser's error page.
+
 Session model (verified 2026-07-24 by inspecting the profile's cookie store):
 
 - **mimo** keeps *persistent* credentials on `account.xiaomi.com` (`passToken`,

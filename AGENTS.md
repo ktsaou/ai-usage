@@ -90,6 +90,12 @@ before changing anything under `src/providers/browser.ts`, `mimo.ts`,
   navigating. It probes only the tabs the user already has open.
 - Never poll the same session from two machines at once. Whichever rotates the
   cookies last leaves the other logged out.
+- A tab is only reusable while its *document* is usable on the target origin —
+  never decide that from `page.url()`, which keeps reporting the last URL the
+  automation library saw committed. A navigation that fails after commit leaves
+  the tab reporting the right URL while the live document is the browser's error
+  page, whose origin is opaque; every cookie read then throws `SecurityError`
+  forever, because nothing re-navigates a tab whose URL looks correct.
 
 ### Session models differ per provider — check before assuming
 
@@ -121,6 +127,16 @@ and expiry only, never values — rather than guessing.
   and the process exits unfinished. Detect completion instead of prompting.
 - **If a fix does not change the symptom, discard the theory.** Do not stack
   another fix on top of an unproven one.
+- **Transient network faults are permanent bugs unless a poll can heal them.**
+  A daemon that starts while its host's network is still settling will see loads
+  fail; anything that then keeps a broken tab, page or client forever turns a
+  few seconds of trouble into an outage that only a restart clears. Every poll
+  must be able to rebuild what it needs.
+- **Reproduce the failure deterministically before fixing it.** A local server
+  that refuses connections, or a dead hostname navigated to after a good load,
+  reproduces both shapes of this failure in seconds with no credentials — and it
+  is the only way to know a fix works, because restarting the service clears the
+  symptom whether or not the fix is correct.
 
 ### Settled questions — do not re-investigate without new evidence
 
