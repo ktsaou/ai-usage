@@ -68,7 +68,17 @@ export async function saveSession(): Promise<number> {
 }
 
 let contextPromise: Promise<BrowserContext> | null = null;
-const pages = new Map<string, Page>();
+const pages = new Map<string, { page: Page; navigatedAt: number }>();
+
+// These consoles are single-page apps, so after the first load a poll is only
+// an XHR and the site never sees another page visit. One console's login died
+// exactly 48h after it was created while polls kept succeeding throughout,
+// which is what an absolute session lifetime looks like — but a session that
+// renews on a real visit would look the same, because nothing ever revisited.
+// Revisiting periodically distinguishes the two, and costs one page load per
+// provider per interval. Done inside a poll rather than on a timer, so a
+// refresh can never navigate a tab out from under an in-flight request.
+const TAB_REFRESH_MS = Number(process.env.AI_USAGE_TAB_REFRESH_MS) || 6 * 60 * 60 * 1000;
 
 /**
  * Adopt an already-open context (the headed login window) so verification runs
@@ -82,7 +92,7 @@ export function useContext(ctx: BrowserContext): void {
 
 /** Bind an existing tab to a provider, so it is reused instead of opening another. */
 export function adoptPage(key: string, page: Page): void {
-  pages.set(key, page);
+  pages.set(key, { page, navigatedAt: Date.now() });
 }
 
 let passive = false;
@@ -154,25 +164,29 @@ async function usable(page: Page, origin: string): Promise<boolean> {
 /** A tab dedicated to one provider, parked on `url`. Re-navigates if `force`. */
 export async function getPage(key: string, url: string, force = false): Promise<Page> {
   const ctx = await getContext();
-  let page = pages.get(key);
+  let entry = pages.get(key);
 
   if (passive) {
-    if (!page || page.isClosed()) throw new Error("no signed-in tab yet");
-    return page;
+    if (!entry || entry.page.isClosed()) throw new Error("no signed-in tab yet");
+    return entry.page;
   }
 
-  if (!page || page.isClosed()) {
-    page = await ctx.newPage();
-    pages.set(key, page);
+  if (!entry || entry.page.isClosed()) {
+    entry = { page: await ctx.newPage(), navigatedAt: 0 };
+    pages.set(key, entry);
   }
+  const { page } = entry;
+
+  const stale = Date.now() - entry.navigatedAt >= TAB_REFRESH_MS;
 
   // Navigate once per tab: the console SPA only has to bootstrap the session,
   // after which polls are same-origin XHRs from the already-open page. Anything
   // that left the tab without a usable document on the target origin gets it
   // re-navigated, which is what makes a failed load self-healing.
-  if (force || !(await usable(page, new URL(url).origin))) {
+  if (force || stale || !(await usable(page, new URL(url).origin))) {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForTimeout(2000);
+    entry.navigatedAt = Date.now();
   }
   return page;
 }

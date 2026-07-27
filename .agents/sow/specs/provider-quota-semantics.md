@@ -86,6 +86,14 @@ polled through a shared logged-in chromium profile (`src/providers/browser.ts`):
 one persistent context, one tab per provider, each tab navigated once and then
 reused, so a poll is a same-origin XHR rather than a page load.
 
+Each tab is also revisited every 6 hours (`AI_USAGE_TAB_REFRESH_MS` overrides
+the interval), lazily inside that provider's own poll. Alibaba's console session
+was measured to end **48h after sign-in** — polls ran every 60s throughout, so
+it is a session lifetime, not an idle timeout. Whether a real page visit renews
+that window is unresolved; the daemon had never revisited a console after its
+first load, so both behaviours looked identical. The periodic revisit is what
+distinguishes them, and the result is recorded in SOW-0003.
+
 A tab is reused only while it still holds a usable document on the console
 origin, which each poll checks by reading `document.cookie` and `location.origin`
 inside the page. Anything else — a load that failed while the host's network was

@@ -107,6 +107,21 @@ periodically and on shutdown) or they die on every restart. Determine which
 kind a provider is by inspecting the profile's cookie store — names, domains
 and expiry only, never values — rather than guessing.
 
+Sessions of the second kind also *end*, and the lifetime is the site's to
+decide. One was measured at 48h to the minute from sign-in, while polls ran
+every 60s without a gap — so it is a lifetime, not an idle timeout, and no
+restart or code change extends it. Measure it the same way before theorising:
+the site usually sets a batch of long-lived cookies at sign-in whose expiry
+stamps reveal exactly when the session was created, and the journal shows the
+last success and first failure.
+
+Because polls are same-origin XHRs, the site otherwise never sees a page visit
+after the first load, so a session that renews on a visit and one with a fixed
+lifetime look identical. Each tab is therefore revisited every
+`TAB_REFRESH_MS` (6h; override with `AI_USAGE_TAB_REFRESH_MS`), lazily inside
+the provider's own poll — never on a timer, which would navigate a tab out from
+under an in-flight request.
+
 ### Debugging rules learned the hard way
 
 - **Auth failure is not "no data".** These consoles answer HTTP 200 while
