@@ -5,8 +5,13 @@
 Status: in-progress
 
 Sub-state: implemented and deployed. The answer needs a full session cycle to
-arrive — the current session was created 2026-07-27 ~00:35 UTC, so the verdict
-is due after 2026-07-29 ~00:35 UTC (48h). Nothing else in this SOW is pending.
+arrive — the current session was created **2026-07-27 00:20:30 UTC**, so the
+verdict is due just after **2026-07-29 00:20 UTC**. Nothing else is pending.
+
+The creation time is read from a 24h analytics cookie set at sign-in
+(`_gid`, expiring 2026-07-28 00:20:30). The 30-day cookies used to date the
+previous session were not re-set by this sign-in, so that marker is not
+reliable across logins — a short-TTL cookie set fresh at every sign-in is.
 
 ## Requirements
 
@@ -206,7 +211,9 @@ Real-use evidence:
 
 - Login tool verified all three browser providers against the live quota APIs
   before the profile was shipped.
-- Post-deploy: recorded below once the daemon has polled.
+- Deployed to the daemon host (code, then profile sync): 8/8 providers healthy,
+  zero error lines in the journal since service start. The first revisit falls
+  ~6h after start, giving several revisits before the 48h mark.
 
 Reviewer findings:
 
