@@ -8,7 +8,47 @@ const CONSOLE_URL =
 
 const GATEWAY = "https://bailian-singapore-cs.alibabacloud.com/data/api.json";
 
+// The console's login page offers a third-party sign-in as a plain link. Going
+// straight to that link's href completes the whole OAuth round trip against the
+// identity provider session already in the profile, and lands back on the
+// console signed in — no form, no clicks. Clicking the button instead does not
+// work headlessly: the login page carries an anti-bot overlay
+// (`baxia-dialog-mask`) that covers it and swallows the click.
+const THIRD_PARTY_LOGIN = `https://account.alibabacloud.com/login/third_party_bind_login.htm?type=google&oauth_callback=${encodeURIComponent(
+  CONSOLE_URL
+)}`;
+
 export const SESSION_EXPIRED = "session expired — run `npm run login`, then `npm run sync:profile`";
+const RELOGIN_FAILED =
+  "session expired and automatic sign-in did not restore it — run `npm run login`, then `npm run sync:profile`";
+
+// The console session lasts 48h from sign-in regardless of use (measured twice,
+// to the minute, while polls ran throughout). Rather than asking the user to
+// sign in every two days, mint a new one from the identity provider's session,
+// which lasts about a year. Attempts are single-flighted so the two providers
+// sharing this console cannot start two sign-ins at once, and rate limited so a
+// genuinely dead identity session is not retried every poll.
+const RELOGIN_COOLDOWN_MS = 10 * 60 * 1000;
+let lastReloginAt = 0;
+let reloginInFlight: Promise<void> | null = null;
+
+function relogin(page: Page): Promise<void> {
+  if (reloginInFlight) return reloginInFlight;
+  if (Date.now() - lastReloginAt < RELOGIN_COOLDOWN_MS) return Promise.resolve();
+
+  console.log("[alibaba] console session expired — signing in again");
+  reloginInFlight = page
+    .goto(THIRD_PARTY_LOGIN, { waitUntil: "domcontentloaded", timeout: 60000 })
+    .then(() => page.waitForTimeout(3000))
+    .catch((err: any) => {
+      console.error(`[alibaba] sign-in navigation failed: ${err.message?.split("\n")[0]}`);
+    })
+    .finally(() => {
+      lastReloginAt = Date.now();
+      reloginInFlight = null;
+    });
+  return reloginInFlight;
+}
 
 interface GatewayResponse {
   ok: boolean;
@@ -63,7 +103,7 @@ async function gatewayFetch(p: Page, api: string, data: Record<string, unknown>)
   };
 }
 
-/** Runs `api` on the provider's tab, re-navigating once if the session looks stale. */
+/** Runs `api` on the provider's tab, restoring the session if it has lapsed. */
 async function callGateway(
   key: string,
   api: string,
@@ -71,13 +111,19 @@ async function callGateway(
 ): Promise<GatewayResponse> {
   let page = await getPage(key, CONSOLE_URL);
   let res = await gatewayFetch(page, api, data);
-  if (res.loggedOut) {
-    // A fresh console load re-mints short-lived session cookies; only a truly
-    // dead session still fails after the retry.
-    page = await getPage(key, CONSOLE_URL, true);
-    res = await gatewayFetch(page, api, data);
-  }
-  return res;
+  if (!res.loggedOut) return res;
+
+  // A fresh console load re-mints short-lived session cookies; only a session
+  // that has reached its lifetime still fails after the retry.
+  page = await getPage(key, CONSOLE_URL, true);
+  res = await gatewayFetch(page, api, data);
+  if (!res.loggedOut) return res;
+
+  await relogin(page);
+  // The sign-in lands back on the console, so the tab is normally usable
+  // already; getPage re-navigates only if it is not.
+  page = await getPage(key, CONSOLE_URL);
+  return gatewayFetch(page, api, data);
 }
 
 export async function fetchAlibabaCoding(config: ProviderConfig): Promise<ProviderResult> {
@@ -92,7 +138,7 @@ export async function fetchAlibabaCoding(config: ProviderConfig): Promise<Provid
         },
       }
     );
-    if (res.loggedOut) return result(config, [], null, SESSION_EXPIRED);
+    if (res.loggedOut) return result(config, [], null, RELOGIN_FAILED);
     if (!res.ok) return result(config, [], null, res.errorMsg || "gateway error");
 
     const info = res.data?.codingPlanInstanceInfos?.[0];
@@ -126,7 +172,7 @@ export async function fetchAlibabaCoding(config: ProviderConfig): Promise<Provid
 export async function fetchAlibabaToken(config: ProviderConfig): Promise<ProviderResult> {
   try {
     const usage = await callGateway(config.id, "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage", {});
-    if (usage.loggedOut) return result(config, [], null, SESSION_EXPIRED);
+    if (usage.loggedOut) return result(config, [], null, RELOGIN_FAILED);
     if (!usage.ok) return result(config, [], null, usage.errorMsg || "gateway error");
     if (!usage.data) return result(config, [], null, "no token plan usage data");
 

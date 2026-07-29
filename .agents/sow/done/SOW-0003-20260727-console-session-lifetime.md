@@ -2,11 +2,12 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: implemented and deployed. The answer needs a full session cycle to
-arrive — the current session was created **2026-07-27 00:20:30 UTC**, so the
-verdict is due just after **2026-07-29 00:20 UTC**. Nothing else is pending.
+Sub-state: answered. The session window is **absolute, not sliding** — it ended
+48h after sign-in to the minute despite ~7 revisits. The revisit is kept at the
+user's request for future use; the two-day re-login is solved separately by
+automatic sign-in (SOW-0004).
 
 The creation time is read from a 24h analytics cookie set at sign-in
 (`_gid`, expiring 2026-07-28 00:20:30). The 30-day cookies used to date the
@@ -196,8 +197,13 @@ Open decisions:
 
 Acceptance criteria evidence:
 
-- Revisit behaviour: covered by test (below). **Session-lifetime verdict:
-  pending the 48h mark — this is why the SOW is not completed.**
+- Revisit behaviour: covered by test (below).
+- **Verdict, 2026-07-29: the window is absolute.** Session minted
+  2026-07-27 00:20:30 UTC; last successful poll 2026-07-29 **00:19:47**; first
+  failure **00:20:50** — 48h to the minute, with ~7 revisits in between and 60s
+  polls throughout, on a service that had not restarted. A visit does not renew
+  the session.
+- Spec updated with the measured semantics.
 
 Tests or equivalent validation:
 
@@ -275,15 +281,36 @@ Follow-up mapping:
 
 ## Outcome
 
-Pending the session cycle.
+The console's session lifetime is absolute: 48h from sign-in, unaffected by use,
+page revisits, or service restarts. The experiment did what it was for — it
+turned an untested assumption into a measured fact, and ruled out the cheap fix.
+
+Consequences:
+
+- The re-login burden cannot be removed by making the daemon behave more like a
+  human visitor. It is removed instead by having the daemon sign itself in from
+  a longer-lived identity session — implemented in SOW-0004.
+- The 6h revisit is kept (user decision, 2026-07-29): it does not extend the
+  session, but a periodic real page visit is expected to be useful for planned
+  work. It is now documented as serving that purpose, not this one.
 
 ## Lessons Extracted
 
-Pending.
+- Two indistinguishable explanations stay indistinguishable until the experiment
+  runs. "Polls kept succeeding, so the session must be idle-timing-out" and "the
+  clock started at sign-in" produced identical evidence; only revisiting could
+  separate them, and it cost one page load per 6h to find out.
+- A negative result is a result. The revisit did not extend anything, and
+  knowing that stopped a whole family of "keep it warm" ideas from being tried
+  one at a time.
+- Date a session from a short-lived cookie the site sets at sign-in, not from a
+  long one. The 30-day cookies were not re-issued on the second sign-in, so they
+  would have dated the session to the wrong login entirely.
 
 ## Followup
 
-None beyond the verdict above.
+- Automatic sign-in to remove the two-day re-login: tracked and implemented in
+  SOW-0004.
 
 ## Regression Log
 

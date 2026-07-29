@@ -87,12 +87,27 @@ one persistent context, one tab per provider, each tab navigated once and then
 reused, so a poll is a same-origin XHR rather than a page load.
 
 Each tab is also revisited every 6 hours (`AI_USAGE_TAB_REFRESH_MS` overrides
-the interval), lazily inside that provider's own poll. Alibaba's console session
-was measured to end **48h after sign-in** — polls ran every 60s throughout, so
-it is a session lifetime, not an idle timeout. Whether a real page visit renews
-that window is unresolved; the daemon had never revisited a console after its
-first load, so both behaviours looked identical. The periodic revisit is what
-distinguishes them, and the result is recorded in SOW-0003.
+the interval), lazily inside that provider's own poll.
+
+Alibaba's console session ends **exactly 48h after sign-in**, measured twice to
+the minute, the second time with ~7 page revisits in between and 60s polls
+throughout. The lifetime is absolute: neither use, nor revisits, nor restarts
+extend it (SOW-0003). The revisit is kept for other purposes, not this one.
+
+The daemon therefore **signs itself in again**: when the gateway reports
+`Login.NotLogined` after a forced console reload, it navigates to the login
+page's third-party sign-in `href`
+(`account.alibabacloud.com/login/third_party_bind_login.htm?type=google&oauth_callback=<console>`),
+which completes the OAuth round trip against the identity session stored in the
+profile and lands back on the console signed in. The identity session's cookies
+are persistent and long-lived (over a year), so the two-day console lifetime is
+no longer visible to the operator. Attempts are single-flighted across the two
+alibaba providers and rate limited to one per 10 minutes; only when this also
+fails does the provider report `session expired and automatic sign-in did not
+restore it`, which is the operator's cue to run `npm run login`.
+
+The button on that page cannot be clicked headlessly — an anti-bot overlay
+(`baxia-dialog-mask`) covers it — but its `href` works.
 
 A tab is reused only while it still holds a usable document on the console
 origin, which each poll checks by reading `document.cookie` and `location.origin`

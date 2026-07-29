@@ -108,9 +108,11 @@ kind a provider is by inspecting the profile's cookie store — names, domains
 and expiry only, never values — rather than guessing.
 
 Sessions of the second kind also *end*, and the lifetime is the site's to
-decide. One was measured at 48h to the minute from sign-in, while polls ran
-every 60s without a gap — so it is a lifetime, not an idle timeout, and no
-restart or code change extends it. Measure it the same way before theorising:
+decide. One was measured at 48h to the minute from sign-in — twice, and the
+second time despite the tab being revisited every 6h in between — while polls
+ran every 60s without a gap. So it is an absolute lifetime: not an idle
+timeout, not extendable by use, restarts or code. Measure it the same way
+before theorising:
 the site usually sets a batch of long-lived cookies at sign-in whose expiry
 stamps reveal exactly when the session was created, and the journal shows the
 last success and first failure.
@@ -120,7 +122,20 @@ after the first load, so a session that renews on a visit and one with a fixed
 lifetime look identical. Each tab is therefore revisited every
 `TAB_REFRESH_MS` (6h; override with `AI_USAGE_TAB_REFRESH_MS`), lazily inside
 the provider's own poll — never on a timer, which would navigate a tab out from
-under an in-flight request.
+under an in-flight request. That revisit did **not** extend the session; it is
+kept only because a periodic visit is useful to have.
+
+A fixed lifetime does not have to mean a human signs in again. Where the console
+offers a third-party sign-in whose own session outlives it by a wide margin, the
+daemon re-authenticates itself: on a logged-out gateway reply it navigates
+straight to the sign-in link's `href`, which completes the OAuth round trip
+against the stored identity session and lands back on the console. Attempts are
+single-flighted (two providers share one console) and rate limited, and the
+operator-facing error only appears once that has also failed. Two things make
+this work and are easy to get wrong: **do not click the button** — the login
+page carries an anti-bot overlay that covers it headlessly, while the link's
+`href` bypasses the page entirely; and pass the console URL as the sign-in's
+callback parameter so the tab lands where the poll expects it.
 
 ### Debugging rules learned the hard way
 
@@ -158,7 +173,11 @@ under an in-flight request.
 Recorded because a previous iteration built a whole design around assumptions
 that were never tested, and all of them were wrong:
 
-- Neither console blocks headless browsers. Both were probed directly.
+- Neither console blocks headless browsers, and neither does the quota API
+  behind them. Both were probed directly. **Their login pages are a different
+  story**: one puts an anti-bot overlay over the sign-in controls, so anything
+  that has to interact with a login *page* headlessly should be assumed
+  contested, and reached by URL rather than by clicking.
 - Chromium runs fine as the service user under the unit's full hardening, with
   the sandbox enabled and no `--no-sandbox`, including on distributions that
   restrict unprivileged user namespaces.

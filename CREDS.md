@@ -56,10 +56,20 @@ provider reports.
 
 ### When a session expires
 
-The affected provider shows `session expired — run npm run login, then
-npm run sync:profile` on the dashboard and in the MCP. Repeat the two commands
-above. Expect this occasionally for Alibaba, whose console login is
-session-only; MiMo renews itself and should not need you again.
+Normally you do nothing — both providers renew themselves:
+
+- **MiMo** re-mints its short-lived token from a credential that lasts a month.
+- **Alibaba's console session lasts exactly 48h from sign-in**, whether or not
+  it is used. The daemon signs in again by itself, reusing the identity-provider
+  session in the profile, which is good for about a year. The journal records
+  `[alibaba] console session expired — signing in again`, one poll reports an
+  error, and the next one is back to normal.
+
+You are only needed when the automatic sign-in cannot work either — the identity
+session itself expired, the password changed, or the provider now demands a
+challenge. Then the provider shows `session expired and automatic sign-in did
+not restore it — run npm run login, then npm run sync:profile`, and you repeat
+the two commands above. Expect that roughly once a year, not every few days.
 
 ⚠️ After syncing, avoid running the browser providers locally
 (`npm run test:all mimo`, `alibaba-coding`, `alibaba-token`) — the workstation
