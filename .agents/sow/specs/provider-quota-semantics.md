@@ -29,6 +29,9 @@ alongside 111/4000 = 2.8% used).
 emitted as the metric's `breakdown`, and both z.ai metrics carry a `note`
 saying which one is tool calls and which one is model/LLM usage, because
 consumers were reading the monthly tool-call quota as remaining LLM calls.
+It is also flagged `secondary`, so it can never headline the card: its percent
+used was outranking the 5h model quota (2.8% against 2.0%) and putting a
+tool-call number where the plan's usage belongs.
 
 ## MiniMax (`type: minimax`)
 
@@ -182,12 +185,13 @@ the console does not redirect when logged out.
 
 - **MCP percent metrics**: `N% used, M% remaining resets <RFC3339> (in <countdown>)`.
 - **Metric self-description**: a metric may carry `note` (what the quota
-  actually measures) and `breakdown` (per-item split of `used`). The MCP renders
+  actually measures), `breakdown` (per-item split of `used`) and `secondary`
+  (ineligible for the card headline). The MCP renders
   them as indented `what this measures:` and `breakdown:` lines under the
   metric. Add a `note` whenever a metric name or unit could be misread as
   something else — the MCP output is consumed by assistants that otherwise
-  infer meaning from the name alone. Neither field is stored in SQLite or
-  exported to Prometheus; both are descriptive, not historical.
+  infer meaning from the name alone. None of the three is stored in SQLite or
+  exported to Prometheus; they are descriptive, not historical.
 - **MCP countdown** (`resets in …`): units descend `d h m s`; **days is the
   largest unit (no months)**; zero units trimmed; `now` when <= 0. Lifetime
   balances (no reset) show no countdown.
@@ -196,6 +200,23 @@ the console does not redirect when logged out.
   percent used** (most exhausted / binding constraint), not a fixed window
   preference. Non-primary metrics render as sub-bars. On Kimi this headlines the
   weekly quota when it is near-exhausted.
+- **Headline eligibility**: a metric flagged `secondary` never headlines a card —
+  it measures something other than the plan's usage, so its percentage is not
+  comparable with the quota windows. Only the provider module sets this; the
+  renderers must not infer it from a metric name. Today only z.ai's
+  `monthly_mcp` carries it. If every metric of a provider were flagged, the
+  selection falls back to the full list so no card is left without a headline.
+  The rule is implemented twice — `primaryMetric()` in `src/server.ts` (for
+  `/api/summary`) and in `src/dashboard.html` (for the card) — because the
+  dashboard has no build step; the two must stay in step.
+- **Per-window reset**: every metric row on a card shows its own live countdown,
+  not just the headline. A provider is usually capped by several windows at
+  once, and the one that blocks work next is frequently not the most exhausted
+  one — Alibaba Coding headlines its monthly window while its 5h window resets
+  within the hour. Rows whose metric has no reset time (lifetime balances, or a
+  window the API reports without one) leave the column blank; the headline says
+  `no reset window` explicitly. Countdowns are tagged `data-reset` and updated
+  by the page's one-second ticker.
 - **Dashboard history**: the page shows a 40-sample sparkline per card and the
   pay-as-you-go runway/spend figures. There are no time-series charts. Both
   inputs come from `GET /api/summary`, which applies the same primary-metric

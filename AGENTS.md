@@ -52,6 +52,8 @@ Runtime state on the daemon host lives under `/opt/ai-usage`: `data/` (SQLite), 
 
 Per-provider field semantics (metric names, units, windows, reset-time source, unlimited quotas) are documented in `.agents/sow/specs/provider-quota-semantics.md` — the source of truth when changing fetchers or MCP/dashboard rendering.
 
+A metric may carry `note`, `breakdown` and `secondary` — descriptive fields set by the provider module, passed through the API, and never stored or exported. `secondary` means "this measures something other than the plan's usage, so it must not headline a card"; only the fetcher knows that, so renderers must never special-case a metric name to decide it. Card headline selection lives in `primaryMetric()` in both `src/server.ts` and `src/dashboard.html` (the dashboard has no build step and cannot import) — change both together.
+
 ## Serving Cost
 
 The dashboard is served over a residential uplink and refreshes every 60s per

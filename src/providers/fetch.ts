@@ -44,6 +44,9 @@ async function fetchZai(config: ProviderConfig): Promise<ProviderResult> {
       }
       metrics.push(
         metric("monthly_mcp", mcpUsed, mcpTotal, "tool calls", "monthly", limit.nextResetTime ?? null, {
+          // Tool calls, not model usage: its percentage must never compete with
+          // the coding-plan quotas for the card headline.
+          secondary: true,
           note: "z.ai-hosted MCP tool calls (web search, web reader, zread) — NOT model/LLM requests or tokens",
           ...(Object.keys(breakdown).length > 0 ? { breakdown } : {}),
         })

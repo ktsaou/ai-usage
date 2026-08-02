@@ -11,6 +11,12 @@ export interface UsageMetric {
   note?: string;
   /** Per-item split of `used`, when the provider reports one. */
   breakdown?: Record<string, number>;
+  /**
+   * This quota measures something other than the plan's usage, so it must never
+   * headline a card — its percentage is not comparable with the others. Only
+   * the provider module knows this; the renderers must not guess from names.
+   */
+  secondary?: boolean;
 }
 
 export interface ProviderResult {

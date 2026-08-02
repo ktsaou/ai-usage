@@ -167,11 +167,13 @@ header{
 .spark polyline{fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 /* secondary metric rows */
 .sub-metrics{margin-top:12px;border-top:1px dashed var(--border);padding-top:10px;display:flex;flex-direction:column;gap:7px}
-.sub-m{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px}
+.sub-m{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px}
 .sub-m .lbl{color:var(--muted);width:86px;flex:none;text-transform:uppercase;letter-spacing:.05em;font-size:10px}
-.sub-m .mini-bar{flex:1;height:4px;background:#1a2130;border-radius:2px;overflow:hidden}
+.sub-m .mini-bar{flex:1;min-width:24px;height:4px;background:#1a2130;border-radius:2px;overflow:hidden}
 .sub-m .mini-bar i{display:block;height:100%;border-radius:2px}
-.sub-m .val{color:var(--text);font-weight:600;width:52px;text-align:right;flex:none}
+.sub-m .val{color:var(--text);font-weight:600;width:44px;text-align:right;flex:none}
+.sub-m .rst{color:var(--faint);width:58px;text-align:right;flex:none;font-size:10px}
+.sub-m .rst b{color:var(--muted);font-weight:600}
 .err-msg{font-family:var(--mono);font-size:11.5px;color:var(--crit);line-height:1.5;padding:8px 0 4px}
 
 footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--border);
@@ -242,7 +244,17 @@ let cache = {};          // id -> { sparkSVG, payg }
 let serviceMeta = {};    // { name, tagline }
 let firstBuildDone = false;
 
-function primaryMetric(metrics){ if(!metrics||!metrics.length)return null; const pct=metrics.filter(m=>m.percent!==null); if(pct.length)return pct.reduce((a,b)=>b.percent>a.percent?b:a); return metrics[0]; }
+// The most exhausted window, ignoring quotas flagged `secondary` — those measure
+// something other than plan usage (z.ai's tool calls), so their percentage is not
+// comparable. Mirrors primaryMetric() in src/server.ts; keep the two in step.
+function primaryMetric(metrics){
+  if(!metrics||!metrics.length)return null;
+  const eligible=metrics.filter(m=>!m.secondary);
+  const cand=eligible.length?eligible:metrics;   // never leave a card headless
+  const pct=cand.filter(m=>m.percent!==null);
+  if(pct.length)return pct.reduce((a,b)=>b.percent>a.percent?b:a);
+  return cand[0];
+}
 
 function sparkSVG(points,color){ if(!points||points.length<2)return ''; const w=110,h=30,mn=Math.min(...points),mx=Math.max(...points),span=(mx-mn)||1,step=w/(points.length-1); const pts=points.map((p,i)=>`${(i*step).toFixed(1)},${(h-3-((p-mn)/span)*(h-6)).toFixed(1)}`).join(' '); return `<svg class="spark" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" stroke="${color}" opacity="0.85"/></svg>`; }
 
@@ -321,8 +333,11 @@ function renderProviders(){
       chipHtml=`<span class="status-chip"><span class="dot ${lvl}"></span>${lvl==='ok'?'ok':lvl}</span>`;
     }
     const planBadge=lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:(mode?`<span class="plan-badge">${mode}</span>`:'');
+    // Every window carries its own countdown: the headline is only one of a
+    // provider's limits, and the one that blocks work next is often a sub-row.
+    // Tagging with data-reset is enough — tickCountdowns() updates them all.
     const subs=lf.metrics.filter(m=>m!==prim);
-    const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=levelOf(sp);return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span></div>`;}).join('')}</div>`:'';
+    const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=levelOf(sp);const rst=m.resetsAt?`<b data-reset="${m.resetsAt}">${fmtCountdown(m.resetsAt-Date.now())||'now'}</b>`:'';return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span><span class="rst">${rst}</span></div>`;}).join('')}</div>`:'';
     const resetSpan=prim&&prim.resetsAt?`resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`:'<span style="color:var(--faint)">no reset window</span>';
     return `<div class="card${settled}" style="--accent:${accent}">
       <div class="card-top"><div class="pname"><span class="pdot"></span>${esc(p.name)}</div>
