@@ -151,11 +151,7 @@ header{
 .big-used{font-family:var(--mono);font-size:12px;color:var(--text);font-weight:600}
 .big-total{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:2px}
 .bar{height:7px;background:#1a2130;border-radius:4px;overflow:hidden;margin-bottom:12px;position:relative}
-.bar .fill{height:100%;border-radius:4px;position:relative}
-.bar .fill::after{content:'';position:absolute;inset:0;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,.22),transparent);
-  transform:translateX(-100%);animation:shimmer 2.6s infinite}
-@keyframes shimmer{60%,100%{transform:translateX(100%)}}
+.bar .fill{height:100%;border-radius:4px}
 .fill.ok{background:linear-gradient(90deg,#059669,#34d399)}
 .fill.warn{background:linear-gradient(90deg,#d97706,#fbbf24)}
 .fill.crit{background:linear-gradient(90deg,#dc2626,#f87171)}
