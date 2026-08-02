@@ -13,7 +13,6 @@ Partially implemented: remote agents can POST usage data to `/api/ingest`, and i
 - TypeScript (tsx runtime, no build step for dev)
 - Hono HTTP server
 - node:sqlite (built-in, no native deps)
-- Chart.js for dashboard charts
 - MCP SDK for stdio MCP server
 - Patchright (playwright fork) driving a logged-in chromium profile for the
   browser-session providers (mimo, alibaba)
@@ -41,7 +40,7 @@ sudo bash install.sh   # install to /opt/ai-usage, create user, enable service
 
 ## Provider Architecture
 
-Every provider is dispatched through the registry in `src/providers/fetch.ts`; browser-based ones live in their own modules but are registered there too, so the scheduler and the test harness never special-case a provider type. The scheduler polls non-parked providers on `pollIntervalSeconds` (default 60s). Results are stored in SQLite and exposed via `/api/providers`, `/api/history/:id`, `/metrics`, and the dashboard.
+Every provider is dispatched through the registry in `src/providers/fetch.ts`; browser-based ones live in their own modules but are registered there too, so the scheduler and the test harness never special-case a provider type. The scheduler polls non-parked providers on `pollIntervalSeconds` (default 60s). Results are stored in SQLite and exposed via `/api/providers`, `/api/summary`, `/api/history/:id`, `/metrics`, and the dashboard.
 
 Provider types:
 - **Subscription quota** (zai, minimax, kimi, mimo, alibaba): used/total/remaining/percent per window
@@ -52,6 +51,29 @@ Provider types:
 Runtime state on the daemon host lives under `/opt/ai-usage`: `data/` (SQLite), `browser/profile` (the logged-in profile, `0700`), `.cache/ms-playwright` (chromium). `install.sh` must never delete these — they are excluded from its rsync.
 
 Per-provider field semantics (metric names, units, windows, reset-time source, unlimited quotas) are documented in `.agents/sow/specs/provider-quota-semantics.md` — the source of truth when changing fetchers or MCP/dashboard rendering.
+
+## Serving Cost
+
+The dashboard is served over a residential uplink and refreshes every 60s per
+open tab, so a response size is a *recurring* cost, not a one-off.
+
+- **The page may only fetch derived data.** It calls `/api/providers` and
+  `/api/summary`; both are small and bounded. Raw samples are never sent to a
+  browser — `/api/history/:id` exists for manual export and returns the full
+  range, so nothing on a timer may call it.
+- **Anything a card needs from history is computed in `db.ts` and served
+  pre-reduced.** Sparkline points and the two samples a burn rate is measured
+  between are queried with `LIMIT`, not filtered client-side from a full dump.
+  A rewrite that sends rows and lets the page pick will not be noticed in
+  testing — it costs nothing on a LAN and saturates the link in production.
+- Responses are gzipped (`compress()` in `src/server.ts`). It is a safety net
+  for the remaining endpoints, not a substitute for sending less.
+- Charts were removed rather than downsampled: the user judged them not worth
+  their cost. Do not reintroduce a view that needs a time series without
+  agreeing the serving cost first.
+- Samples older than `retentionDays` (config, default 90) are deleted daily.
+  A poll every minute writes ~18k rows/day; without pruning the database grows
+  ~1.1 GB/year. No VACUUM: freed pages are reused, so the file settles.
 
 ## Working On Browser-Session Providers
 

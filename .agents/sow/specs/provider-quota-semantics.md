@@ -196,3 +196,18 @@ the console does not redirect when logged out.
   percent used** (most exhausted / binding constraint), not a fixed window
   preference. Non-primary metrics render as sub-bars. On Kimi this headlines the
   weekly quota when it is near-exhausted.
+- **Dashboard history**: the page shows a 40-sample sparkline per card and the
+  pay-as-you-go runway/spend figures. There are no time-series charts. Both
+  inputs come from `GET /api/summary`, which applies the same primary-metric
+  rule server-side and returns, per provider: the last 40 values of that metric
+  (`percent`, or `total`/`used` for balance/spend providers) and the two
+  samples the burn rate is measured between — the newest, and the newest at or
+  before `spendWindowDays` earlier, falling back to the oldest sample with
+  `sinceFirst: true` when history is shorter than the window. Providers whose
+  last poll failed are omitted, so the page keeps showing their previous values.
+- **Serving size**: a dashboard refresh is `/api/providers` + `/api/summary`,
+  ~1.1 KB gzipped in total. `GET /api/history/:id?days=N` still returns raw
+  samples for manual export; nothing polls it.
+- **Retention**: samples older than `retentionDays` (default 90) are deleted
+  once a day. `/metrics` and the MCP read only the latest sample, so retention
+  affects export only.

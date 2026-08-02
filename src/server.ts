@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { getRequestListener } from "@hono/node-server";
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
@@ -6,8 +7,8 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { AppConfig, IngestPayload } from "./types.js";
-import { DB } from "./db.js";
+import type { AppConfig, IngestPayload, ProviderConfig, UsageMetric } from "./types.js";
+import { DB, type ValueColumn } from "./db.js";
 import { Scheduler } from "./scheduler.js";
 import { renderMetrics } from "./metrics.js";
 import { buildMcpServer, type McpBackend } from "./mcp-server.js";
@@ -36,6 +37,52 @@ export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
   return { service: config.service || {}, providers };
 }
 
+/** How many samples a card's sparkline draws. */
+const SPARK_POINTS = 40;
+
+/**
+ * The most exhausted window — the same rule the dashboard uses to pick a card's
+ * headline metric. Duplicated there because the dashboard is a single static
+ * file with no build step and cannot import from here.
+ */
+function primaryMetric(metrics: UsageMetric[]): UsageMetric | null {
+  if (!metrics?.length) return null;
+  const pct = metrics.filter((m) => m.percent !== null);
+  if (pct.length) return pct.reduce((a, b) => ((b.percent as number) > (a.percent as number) ? b : a));
+  return metrics[0];
+}
+
+/** Balances track what is left; spend and budget track what has gone. */
+function valueColumn(p: ProviderConfig): ValueColumn {
+  if (!p.payg) return "percent";
+  return p.payg === "balance" ? "total" : "used";
+}
+
+/**
+ * Everything the dashboard needs from history, and nothing else: a sparkline
+ * series and the two samples a runway or spend figure is measured between.
+ * Sending raw rows instead cost 47 MB per refresh over eight providers.
+ */
+export function buildSummaryPayload(config: AppConfig, db: DB, scheduler: Scheduler) {
+  const providers = [];
+  for (const p of config.providers) {
+    const last = scheduler.getLastResult(p.id);
+    if (!last || last.error) continue; // leave the client's cached values alone
+    const prim = primaryMetric(last.metrics);
+    if (!prim) continue;
+    const value = valueColumn(p);
+    providers.push({
+      id: p.id,
+      metric: prim.name,
+      spark: db.sparkline(p.id, prim.name, value, SPARK_POINTS),
+      payg: p.payg
+        ? db.paygAnchors(p.id, prim.name, value, (p.spendWindowDays || 7) * 24 * 3600 * 1000)
+        : null,
+    });
+  }
+  return { providers };
+}
+
 export function buildInProcessBackend(config: AppConfig, scheduler: Scheduler): McpBackend {
   return {
     serviceName: config.service?.name || "ai-usage",
@@ -49,6 +96,9 @@ export function buildInProcessBackend(config: AppConfig, scheduler: Scheduler): 
 
 export function createServer(config: AppConfig, db: DB, scheduler: Scheduler) {
   const app = new Hono();
+
+  // The dashboard is served over residential uplinks; nothing proxies this port.
+  app.use(compress());
 
   app.get("/", (c) => {
     const html = readFileSync(resolve(__dirname, "dashboard.html"), "utf-8");
@@ -91,6 +141,8 @@ export function createServer(config: AppConfig, db: DB, scheduler: Scheduler) {
     }
     return c.json({ results });
   });
+
+  app.get("/api/summary", (c) => c.json(buildSummaryPayload(config, db, scheduler)));
 
   app.get("/api/history/:id", (c) => {
     const id = c.req.param("id");

@@ -46,6 +46,8 @@ export interface AppConfig {
   service?: { name?: string; tagline?: string };
   port: number;
   pollIntervalSeconds: number;
+  /** Samples older than this are deleted daily. Defaults to 90. */
+  retentionDays?: number;
   dbPath: string;
   providers: ProviderConfig[];
   ingest: IngestConfig;

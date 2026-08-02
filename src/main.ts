@@ -11,7 +11,18 @@ const scheduler = new Scheduler(config, db);
 scheduler.start();
 const { httpServer, closeMcp } = await startServer(config, db, scheduler);
 
+// Nothing in the product reads samples older than 30 days, and a poll every
+// minute adds ~18k rows a day, so without this the database grows forever.
+const retentionDays = config.retentionDays ?? 90;
+function prune() {
+  const removed = db.prune(retentionDays);
+  if (removed) console.log(`[db] pruned ${removed} samples older than ${retentionDays} days`);
+}
+prune();
+const pruneTimer = setInterval(prune, 24 * 3600 * 1000);
+
 async function shutdown() {
+  clearInterval(pruneTimer);
   scheduler.stop();
   await closeMcp().catch(() => {});
   httpServer.close();

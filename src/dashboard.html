@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 :root{
   --bg:#0a0e15;
@@ -175,16 +174,6 @@ header{
 .sub-m .val{color:var(--text);font-weight:600;width:52px;text-align:right;flex:none}
 .err-msg{font-family:var(--mono);font-size:11.5px;color:var(--crit);line-height:1.5;padding:8px 0 4px}
 
-/* ---------- charts ---------- */
-.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:16px}
-.chart-card{background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:18px 20px;
-  transition:border-color .2s,transform .2s}
-.chart-card:hover{border-color:var(--border-strong);transform:translateY(-2px)}
-.chart-card h3{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
-  margin-bottom:14px;display:flex;align-items:center;gap:8px}
-.chart-card h3 .cdot{width:7px;height:7px;border-radius:50%}
-.chart-box{height:190px;position:relative}
-
 footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--border);
   display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
   font-family:var(--mono);font-size:11px;color:var(--faint)}
@@ -194,7 +183,6 @@ footer a:hover{color:var(--text)}
 @media(max-width:640px){
   .ov-item{padding:2px 20px}
   .ov-num{font-size:26px}
-  .charts{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -229,9 +217,6 @@ footer a:hover{color:var(--text)}
   <div class="sec-title"><h2>Subscriptions</h2><div class="rule"></div><span class="hint" id="updated-hint"></span></div>
   <div class="grid" id="providers"></div>
 
-  <div class="sec-title"><h2>30-Day Trend</h2><div class="rule"></div><span class="hint">usage % over time</span></div>
-  <div class="charts" id="charts"></div>
-
   <footer>
     <span>ai-usage monitor · poll 60s · <span id="ft-host"></span></span>
     <span><a href="/metrics">/metrics</a> · <a href="/api/providers">/api/providers</a> · mcp POST /mcp</span>
@@ -261,15 +246,16 @@ function primaryMetric(metrics){ if(!metrics||!metrics.length)return null; const
 
 function sparkSVG(points,color){ if(!points||points.length<2)return ''; const w=110,h=30,mn=Math.min(...points),mx=Math.max(...points),span=(mx-mn)||1,step=w/(points.length-1); const pts=points.map((p,i)=>`${(i*step).toFixed(1)},${(h-3-((p-mn)/span)*(h-6)).toFixed(1)}`).join(' '); return `<svg class="spark" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" stroke="${color}" opacity="0.85"/></svg>`; }
 
-function computePayg(p, rows){
+// `anchors` is {last,base,sinceFirst} from /api/summary — the two samples the
+// burn rate is measured between, picked server-side so the page never has to
+// download the history they came from.
+function computePayg(p, anchors){
   const mode=paygMode(p); if(!mode)return null;
-  const prim=primaryMetric(p.lastFetch.metrics); if(!prim)return null;
   const isBal=mode==='balance';
-  const pts=rows.filter(r=>r.metric_name===prim.name).map(r=>({t:r.fetched_at,v:isBal?r.total:r.used})).filter(o=>o.v!==null&&o.v!==undefined).sort((a,b)=>a.t-b.t);
-  if(!pts.length)return {mode,ready:false};
-  const last=pts[pts.length-1]; const winDays=p.spendWindowDays||7; const cutoff=last.t-winDays*86400000;
-  const before=pts.filter(o=>o.t<=cutoff); const base=before.length?before[before.length-1]:pts[0];
-  const spanDays=Math.max(1/24,(last.t-base.t)/86400000); const delta=last.v-base.v; const sinceFirst=!before.length;
+  if(!anchors)return {mode,ready:false};
+  const last=anchors.last, base=anchors.base, sinceFirst=anchors.sinceFirst;
+  const winDays=p.spendWindowDays||7;
+  const spanDays=Math.max(1/24,(last.t-base.t)/86400000); const delta=last.v-base.v;
   if(isBal){
     const remaining=last.v; const burn=delta<0?-delta/spanDays:0; const runway=burn>0?remaining/burn:null;
     const warnD=p.balanceWarnDays!=null?p.balanceWarnDays:7, critD=p.balanceCritDays!=null?p.balanceCritDays:2;
@@ -365,33 +351,21 @@ function countUp(id,val){ const el=document.getElementById(id); const from=parse
 
 function tickCountdowns(){ document.querySelectorAll('[data-reset]').forEach(el=>{ const d=parseInt(el.dataset.reset)-Date.now(); el.textContent=fmtCountdown(d)||'now'; }); if(nextReset) document.getElementById('ov-reset').textContent=fmtCountdown(nextReset.ts-Date.now())||'now'; }
 
-async function loadHistory(){
-  const chartSeries={};
-  for(const p of providersData){
-    if(!p.lastFetch||p.lastFetch.error)continue;
-    try{
-      const r=await fetch(`/api/history/${p.id}?days=30`); const h=await r.json(); const rows=h.data||[];
-      const prim=primaryMetric(p.lastFetch.metrics); const mode=paygMode(p);
-      let sparkPts=null;
-      if(prim){
-        const pctRows=rows.filter(d=>d.metric_name===prim.name&&d.percent!==null);
-        const raw=rows.filter(d=>d.metric_name===prim.name).map(d=>mode==='balance'?d.total:d.used).filter(v=>v!==null&&v!==undefined);
-        if(!mode){ if(pctRows.length>=2){ sparkPts=pctRows.map(d=>d.percent).slice(-40); chartSeries[p.id]=pctRows.map(d=>({x:d.fetched_at,y:d.percent})); } }
-        else { if(raw.length>=2) sparkPts=raw.slice(-40); }
-      }
-      const prev=cache[p.id]; cache[p.id]={ sparkSVG: sparkPts?sparkSVG(sparkPts,colorFor(p.id)):(prev?prev.sparkSVG:''), payg: computePayg(p,rows) };
-    }catch(e){}
-  }
+// One small request per refresh. This used to be one full 30-day history per
+// provider — 47 MB a minute — to draw sparklines and two burn-rate numbers.
+async function loadSummary(){
+  try{
+    const r=await fetch('/api/summary'); const d=await r.json();
+    for(const s of (d.providers||[])){
+      const p=providersData.find(x=>x.id===s.id); if(!p)continue;
+      const prev=cache[s.id];
+      cache[s.id]={
+        sparkSVG: s.spark&&s.spark.length>=2 ? sparkSVG(s.spark,colorFor(s.id)) : (prev?prev.sparkSVG:''),
+        payg: computePayg(p,s.payg)
+      };
+    }
+  }catch(e){}
   injectCached();
-  renderCharts(chartSeries);
-}
-
-const chartObjs={};
-function renderCharts(series){
-  const wrap=document.getElementById('charts'); const ids=Object.keys(series);
-  if(!ids.length){ wrap.innerHTML='<div class="empty">not enough history yet — charts appear once data accumulates.</div>'; return; }
-  if(wrap.dataset.ids!==ids.join(',')){ wrap.dataset.ids=ids.join(','); wrap.innerHTML=ids.map(id=>{const p=providersData.find(x=>x.id===id);return `<div class="chart-card"><h3><span class="cdot" style="background:${colorFor(id)}"></span>${p?esc(p.name):id} — 30d</h3><div class="chart-box"><canvas id="ch-${id}"></canvas></div></div>`;}).join(''); }
-  for(const id of ids){ const pts=series[id]; const canvas=document.getElementById('ch-'+id); if(!canvas)continue; const spanMs=pts.length>1?pts[pts.length-1].x-pts[0].x:0; const useTime=spanMs<2*86400000; if(chartObjs[id])chartObjs[id].destroy(); const c=colorFor(id); chartObjs[id]=new Chart(canvas,{type:'line',data:{datasets:[{data:pts,borderColor:c,backgroundColor:c+'10',fill:true,borderWidth:1.8,pointRadius:0,tension:.35}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},scales:{x:{type:'linear',ticks:{color:'#5a6578',maxTicksLimit:6,callback:v=>{const d=new Date(v);return useTime?d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0'):(d.getMonth()+1)+'/'+d.getDate();}},grid:{color:'#1a2130'}},y:{min:0,max:100,ticks:{color:'#5a6578',callback:v=>v+'%'},grid:{color:'#1a2130'}}},plugins:{legend:{display:false},tooltip:{backgroundColor:'#151b28',borderColor:'#2a3447',borderWidth:1,titleColor:'#8b96ab',bodyColor:'#e9edf4',callbacks:{title:items=>new Date(items[0].parsed.x).toLocaleString(),label:item=>item.parsed.y.toFixed(1)+'% used'}}}}}); }
 }
 
 function applyBranding(){ if(!serviceMeta||!serviceMeta.name)return; const h1=document.querySelector('.brand h1'); if(h1)h1.innerHTML=esc(serviceMeta.name)+' <span>/ monitor</span>'; const sub=document.querySelector('.brand .sub'); if(sub)sub.textContent=serviceMeta.tagline||'subscription quota telemetry'; document.title=serviceMeta.name+' — usage monitor'; }
@@ -409,7 +383,7 @@ function tickClock(){ const n=new Date(); document.getElementById('clock-time').
 document.getElementById('ft-host').textContent=location.host;
 let refreshStart=Date.now();
 function tickRefreshLine(){ document.getElementById('refreshline').style.width=Math.min(100,((Date.now()-refreshStart)/1000/REFRESH_S)*100)+'%'; }
-async function tick(){ refreshStart=Date.now(); await load(); await loadHistory(); }
+async function tick(){ refreshStart=Date.now(); await load(); await loadSummary(); }
 tick();
 tickClock(); setInterval(tickClock,1000); setInterval(tickCountdowns,1000); setInterval(tickRefreshLine,900); setInterval(tick,REFRESH_S*1000);
 </script>

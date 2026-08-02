@@ -5,6 +5,7 @@
   },
   "port": 9199,
   "pollIntervalSeconds": 60,
+  "retentionDays": 90,
   "dbPath": "./data/ai-usage.db",
   "providers": [
     {
