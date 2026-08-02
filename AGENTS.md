@@ -56,8 +56,35 @@ A metric may carry `note`, `breakdown` and `secondary` — descriptive fields se
 
 ## Serving Cost
 
-The dashboard is served over a residential uplink and refreshes every 60s per
-open tab, so a response size is a *recurring* cost, not a one-off.
+The dashboard is meant to stay open on a screen indefinitely. Both what it
+transfers and what it burns while nobody touches it are *recurring* costs.
+
+### Idle cost
+
+Measured with a headless browser sampling the whole chromium process tree
+(`scratchpad` harness, 25-40s windows): the page cost **9.5% of a CPU core doing
+nothing**, and now costs **0.3%** — the same as a page with no timers at all.
+
+- **No continuously running animation, anywhere.** A CSS `transition` or an
+  infinite `animation` makes the browser produce frames forever. The single
+  worst offender was a `transition:width` on the 2px refresh line: 6.9% of a
+  core on its own, because animating width repaints a blurred glow 60×/second.
+  Pulsing status dots cost another 1.5%.
+- **Step, don't animate.** The refresh line advances in 1-second increments and
+  reads as alive exactly the same. A GPU-composited `transform` version was also
+  tried and still cost 2.5% — the compositor runs whether or not the main thread
+  does. Stepping is the only approach that reaches the floor.
+- **One timer for everything on the second, one for the data.** Four intervals
+  became two; the per-second work (clock, countdowns, refresh line) totals
+  ~0.2% of a core.
+- Measure before and after with the CPU harness rather than reasoning about it.
+  What looked cheap (the 1s timers) was noise; what looked decorative (a 2px
+  line) dominated.
+
+### Transfer cost
+
+The dashboard refreshes every 60s per open tab, so a response size is paid
+again every minute, per viewer.
 
 - **The page may only fetch derived data.** It calls `/api/providers` and
   `/api/summary`; both are small and bounded. Raw samples are never sent to a
