@@ -1,6 +1,14 @@
 import { DB } from "./db.js";
+import type { ProviderRisk, RiskLevel } from "./risk.js";
 
-export function renderMetrics(db: DB): string {
+const LEVEL_VALUE: Record<RiskLevel, number> = { ok: 0, warn: 1, crit: 2 };
+
+/**
+ * Prometheus text format. `+Inf` is a valid gauge value and is used where a
+ * quota is not being consumed at all: dropping the series instead would make
+ * every alert expression fall through the gap exactly when nothing is wrong.
+ */
+export function renderMetrics(db: DB, riskFor?: (providerId: string) => ProviderRisk | undefined): string {
   const rows = db.allLatest();
   const lines: string[] = [];
 
@@ -12,6 +20,18 @@ export function renderMetrics(db: DB): string {
   lines.push("# TYPE ai_usage_total gauge");
   lines.push("# HELP ai_usage_remaining Remaining allowance");
   lines.push("# TYPE ai_usage_remaining gauge");
+  lines.push("# HELP ai_usage_burn_rate_percent_per_hour Percent of the quota consumed per hour, over the last hour");
+  lines.push("# TYPE ai_usage_burn_rate_percent_per_hour gauge");
+  lines.push(
+    "# HELP ai_usage_peak_burn_rate_percent_per_hour Percent of the quota consumed in the busiest hour of the last 24"
+  );
+  lines.push("# TYPE ai_usage_peak_burn_rate_percent_per_hour gauge");
+  lines.push("# HELP ai_usage_burn_ratio Current burn rate over the rate this quota can afford until it resets (>1 exhausts early)");
+  lines.push("# TYPE ai_usage_burn_ratio gauge");
+  lines.push("# HELP ai_usage_headroom_hours Hours until this quota is exhausted at the current burn rate");
+  lines.push("# TYPE ai_usage_headroom_hours gauge");
+  lines.push("# HELP ai_usage_risk_level Exhaustion risk: 0 ok, 1 elevated, 2 at risk");
+  lines.push("# TYPE ai_usage_risk_level gauge");
 
   for (const row of rows) {
     const labels = `provider="${row.provider_id}",name="${row.provider_name}",metric="${row.metric_name}",unit="${row.unit}",window="${row.window || ""}"`;
@@ -28,6 +48,20 @@ export function renderMetrics(db: DB): string {
     if (row.remaining !== null) {
       lines.push(`ai_usage_remaining{${labels}} ${row.remaining}`);
     }
+
+    const risk = riskFor?.(row.provider_id)?.metrics[row.metric_name];
+    if (!risk) continue;
+    if (risk.ratePerHour !== null) {
+      lines.push(`ai_usage_burn_rate_percent_per_hour{${labels}} ${risk.ratePerHour}`);
+      lines.push(`ai_usage_headroom_hours{${labels}} ${risk.headroomHours ?? "+Inf"}`);
+    }
+    if (risk.peakRatePerHour !== null) {
+      lines.push(`ai_usage_peak_burn_rate_percent_per_hour{${labels}} ${risk.peakRatePerHour}`);
+    }
+    if (risk.burnRatio !== null) {
+      lines.push(`ai_usage_burn_ratio{${labels}} ${risk.burnRatio}`);
+    }
+    lines.push(`ai_usage_risk_level{${labels}} ${LEVEL_VALUE[risk.level]}`);
   }
 
   return lines.join("\n") + "\n";

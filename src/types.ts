@@ -17,6 +17,13 @@ export interface UsageMetric {
    * the provider module knows this; the renderers must not guess from names.
    */
   secondary?: boolean;
+  /**
+   * A trailing window rather than one that resets: `used` is what was consumed
+   * over the last window length and falls again as that usage ages out, so
+   * there is no reset instant to count down to and no reset to extrapolate to.
+   * Only the provider module can tell — the API field naming does not.
+   */
+  rolling?: boolean;
 }
 
 export interface ProviderResult {

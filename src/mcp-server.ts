@@ -12,6 +12,60 @@ function toRfc3339(ms: number | null | undefined): string | null {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+/** Hours as something readable: `40m`, `3.1h`, `2.4d`. */
+function hours(h: number | null | undefined): string | null {
+  if (h === null || h === undefined || !Number.isFinite(h)) return null;
+  if (h >= 48) return `${(h / 24).toFixed(1)}d`;
+  if (h >= 1) return `${h.toFixed(1)}h`;
+  return `${Math.round(h * 60)}m`;
+}
+
+/**
+ * How long the burn ratio is measured against. Only needed where the reset time
+ * is not already on the line.
+ */
+function deadline(risk: any): string {
+  if (!risk) return "";
+  if (risk.rolling) return " (trailing window, no reset)";
+  const h = hours(risk.horizonHours);
+  return h ? ` (resets in ${h})` : "";
+}
+
+/**
+ * The burn figures, in the order a caller needs them: how fast it is going, how
+ * long that leaves, and whether that beats the reset. Stated as measurements,
+ * never as advice — what a caller should do with a quota depends on what they
+ * are about to run, which this server cannot know.
+ */
+function rate(r: number): string {
+  return r > 0 && r < 0.05 ? "<0.1%/h" : `${r.toFixed(1)}%/h`;
+}
+
+function burnSummary(risk: any): string | null {
+  if (!risk) return null;
+  const label: Record<string, string> = { ok: "ok", warn: "elevated", crit: "at risk" };
+  const parts: string[] = [`risk ${label[risk.level] || risk.level}`];
+
+  const now = risk.ratePerHour;
+  const peak = risk.peakRatePerHour;
+  if (now === 0) parts.push("idle");
+  else if (now !== null && now !== undefined) parts.push(`burn ${rate(now)}`);
+  if (peak > 0 && peak > now) parts.push(`peak 24h ${rate(peak)}`);
+
+  const head = hours(risk.headroomHours);
+  if (head) parts.push(`headroom ${head}`);
+  // The peak-rate headroom is only worth stating when a resumed burst would
+  // actually beat the deadline; otherwise it is a large number about nothing.
+  const peakHead = hours(risk.peakHeadroomHours);
+  if (peakHead && risk.horizonHours && risk.peakHeadroomHours < risk.horizonHours) {
+    parts.push(`${peakHead} at peak pace`);
+  }
+  if (risk.burnRatio !== null && risk.burnRatio !== undefined) {
+    parts.push(`burn ratio ${risk.burnRatio.toFixed(2)}x`);
+  }
+  return parts.join(" · ");
+}
+
 function countdown(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "now";
   const s = Math.floor(ms / 1000);
@@ -33,7 +87,7 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
 
   server.tool(
     "list_providers",
-    `${name}: list the model providers this monitor tracks and whether each is a subscription quota or a pay-as-you-go balance. Call this first to discover valid provider ids for ${name}.`,
+    `${name}: list the model providers this monitor tracks, whether each is a subscription quota or a pay-as-you-go balance, and how fast each is being consumed — burn ratio and remaining headroom in hours. Call this first to discover valid provider ids for ${name}.`,
     {},
     async () => {
       const data = await backend.listProviders();
@@ -46,15 +100,25 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
             : lf.error
               ? `ERROR ${lf.error}`
               : `${lf.metrics.length} metrics${lf.plan ? " · plan " + lf.plan : ""}${p.payg ? " · payg:" + p.payg : ""}`;
-        return `- ${p.id} (${p.name}): ${state}`;
+        // The binding window's burn figures: the provider's risk is whichever
+        // of its windows runs out first, so that is the one worth listing.
+        const burn = lf && !lf.error ? burnSummary(p.risk?.binding) : null;
+        const detail = burn ? `\n    ${p.risk.metric}${deadline(p.risk.binding)}: ${burn}` : "";
+        return `- ${p.id} (${p.name}): ${state}${detail}`;
       });
-      return { content: [{ type: "text", text: `# ${name} — monitored providers\n${lines.join("\n")}` }] };
+      const legend =
+        "burn ratio = current pace / the pace this quota can afford until it resets; above 1 means it runs out before the reset. headroom = hours until exhausted at the current pace.";
+      return {
+        content: [
+          { type: "text", text: `# ${name} — monitored providers\n${lines.join("\n")}\n\n${legend}` },
+        ],
+      };
     }
   );
 
   server.tool(
     "query_provider",
-    `${name} models remaining usage report: fetch the current remaining subscription quota (or pay-as-you-go balance / recent spend) for one provider tracked by ${name}. Returns used/total/remaining, percent, reset time and plan. Valid provider ids: ${idHint || "call list_providers"}.`,
+    `${name} models remaining usage report: fetch the current remaining subscription quota (or pay-as-you-go balance / recent spend) for one provider tracked by ${name}. Returns used/total/remaining, percent, reset time, plan, and per window how fast it is being consumed — burn rate, peak rate of the last 24h, headroom in hours and burn ratio. Valid provider ids: ${idHint || "call list_providers"}.`,
     {
       provider: z.string().describe(
         `Provider id as listed by list_providers (${idHint || "e.g. zai, minimax, kimi, deepseek, openrouter"}).`
@@ -77,6 +141,8 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
 
         // Callers otherwise guess what a quota measures from its name alone.
         const extra: string[] = [];
+        const burn = burnSummary(m.risk);
+        if (burn) extra.push(`      ${burn}`);
         if (m.note) extra.push(`      what this measures: ${m.note}`);
         if (m.breakdown && Object.keys(m.breakdown).length > 0) {
           const parts = Object.entries(m.breakdown)

@@ -146,21 +146,37 @@ export async function fetchAlibabaCoding(config: ProviderConfig): Promise<Provid
 
     const q = info.codingPlanQuotaInfo || {};
     const metrics: UsageMetric[] = [];
-    const windows: Array<[string, string, string, string, string]> = [
-      ["5h_quota", "5h", "per5HourUsedQuota", "per5HourTotalQuota", "per5HourQuotaNextRefreshTime"],
-      ["weekly_quota", "weekly", "perWeekUsedQuota", "perWeekTotalQuota", "perWeekQuotaNextRefreshTime"],
+    // The 5h bucket is a *trailing* window, not one that resets: its used count
+    // both rises and falls (measured over 14 days of history), and its
+    // "next refresh time" is always the server's current time rather than a
+    // future instant. Reporting that as a reset made it win every
+    // "soonest reset" comparison with a countdown permanently at zero.
+    const windows: Array<[string, string, string, string, string, boolean]> = [
+      ["5h_quota", "5h", "per5HourUsedQuota", "per5HourTotalQuota", "per5HourQuotaNextRefreshTime", true],
+      ["weekly_quota", "weekly", "perWeekUsedQuota", "perWeekTotalQuota", "perWeekQuotaNextRefreshTime", false],
       [
         "monthly_quota",
         "monthly",
         "perBillMonthUsedQuota",
         "perBillMonthTotalQuota",
         "perBillMonthQuotaNextRefreshTime",
+        false,
       ],
     ];
-    for (const [name, window, usedKey, totalKey, resetKey] of windows) {
+    for (const [name, window, usedKey, totalKey, resetKey, rolling] of windows) {
       const total = Number(q[totalKey]);
       if (!Number.isFinite(total) || total <= 0) continue; // unlimited or absent
-      metrics.push(metric(name, Number(q[usedKey]) || 0, total, "requests", window, q[resetKey] ?? null));
+      metrics.push(
+        metric(
+          name,
+          Number(q[usedKey]) || 0,
+          total,
+          "requests",
+          window,
+          rolling ? null : q[resetKey] ?? null,
+          rolling ? { rolling: true, note: "trailing 5 hours of usage — this window has no reset, it decays" } : {}
+        )
+      );
     }
 
     return result(config, metrics, info.instanceName || info.instanceType || null);

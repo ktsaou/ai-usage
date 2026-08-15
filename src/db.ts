@@ -18,6 +18,12 @@ export interface PaygAnchors {
   sinceFirst: boolean;
 }
 
+/** The two samples a quota's burn rate is measured between. */
+export interface MetricAnchors {
+  last: Sample;
+  base: Sample;
+}
+
 // Interpolated into SQL, so it may only ever be one of these.
 const VALUE_COLUMNS: readonly ValueColumn[] = ["percent", "used", "total"];
 
@@ -136,6 +142,66 @@ export class DB {
     if (!last) return null;
     const before = pick("DESC", last.t - windowMs);
     return { last, base: before ?? pick("ASC") ?? last, sinceFirst: !before };
+  }
+
+  /**
+   * The two samples a quota's burn rate is measured between: the newest one, and
+   * the newest at or before `lookbackMs` earlier **within the same window
+   * instance**, falling back to that instance's first sample when history does
+   * not reach back that far.
+   *
+   * The window constraint is the whole point: `used` drops to zero at a reset,
+   * so a pair spanning one reads as a large negative rate — or, worse, as a
+   * plausible small one. Rolling windows carry no reset instant (`resets_at IS
+   * NULL`) and are therefore one continuous instance, which is what they are.
+   */
+  metricAnchors(providerId: string, metricName: string, lookbackMs: number): MetricAnchors | null {
+    const last = this.db
+      .prepare(
+        `SELECT fetched_at AS t, percent AS v, resets_at AS w FROM measurements
+          WHERE provider_id = ? AND metric_name = ? AND percent IS NOT NULL
+          ORDER BY fetched_at DESC LIMIT 1`
+      )
+      .get(providerId, metricName) as (Sample & { w: number | null }) | undefined;
+    if (!last) return null;
+
+    // `IS` rather than `=` so the NULL of a rolling window matches itself.
+    const inWindow = (extra: string, ...args: number[]) =>
+      this.db
+        .prepare(
+          `SELECT fetched_at AS t, percent AS v FROM measurements
+            WHERE provider_id = ? AND metric_name = ? AND percent IS NOT NULL
+              AND resets_at IS ? ${extra}`
+        )
+        .get(providerId, metricName, last.w, ...args) as Sample | undefined;
+
+    const base =
+      inWindow("AND fetched_at <= ? ORDER BY fetched_at DESC LIMIT 1", last.t - lookbackMs) ??
+      inWindow("ORDER BY fetched_at ASC LIMIT 1");
+    if (!base || base.t >= last.t) return null;
+    return { last: { t: last.t, v: last.v }, base };
+  }
+
+  /**
+   * The largest rise this metric made inside any single clock hour since
+   * `since` — how hard this quota gets hit when it is being used at all, which
+   * a rate measured over the last hour cannot show while nobody is working.
+   *
+   * Buckets are grouped by window instance too, so the drop at a reset is never
+   * read as a rise. A burst split across an hour boundary is measured as its two
+   * halves, which understates it; that is the accepted cost of doing this in one
+   * indexed aggregate rather than a sliding scan.
+   */
+  peakHourlyRise(providerId: string, metricName: string, since: number): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(d) AS peak FROM (
+           SELECT MAX(percent) - MIN(percent) AS d FROM measurements
+            WHERE provider_id = ? AND metric_name = ? AND percent IS NOT NULL AND fetched_at >= ?
+            GROUP BY fetched_at / 3600000, resets_at)`
+      )
+      .get(providerId, metricName, since) as { peak: number | null } | undefined;
+    return row?.peak ?? null;
   }
 
   /**

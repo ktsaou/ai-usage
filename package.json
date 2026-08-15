@@ -9,6 +9,7 @@
     "mcp": "tsx src/mcp.ts",
     "login": "tsx src/login.ts",
     "sync:profile": "bash scripts/sync-profile.sh",
+    "test": "node --import tsx --test src/*.test.ts",
     "test:all": "tsx src/test-all.ts"
   },
   "devDependencies": {

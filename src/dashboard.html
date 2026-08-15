@@ -157,6 +157,11 @@ header{
 .fill.ok{background:linear-gradient(90deg,#059669,#34d399)}
 .fill.warn{background:linear-gradient(90deg,#d97706,#fbbf24)}
 .fill.crit{background:linear-gradient(90deg,#dc2626,#f87171)}
+/* burn line: the pace, and what it leaves. A percentage alone hides this. */
+.burn{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin:-4px 0 11px;line-height:1.5}
+.burn .w{color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
+.burn b{font-weight:600;color:var(--text)}
+.burn b.warn{color:var(--warn)}.burn b.crit{color:var(--crit)}
 .card-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .reset{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .reset svg{width:12px;height:12px;opacity:.7}
@@ -207,9 +212,9 @@ footer a:hover{color:var(--text)}
 
   <section class="overview" id="overview">
     <div class="ov-item"><div class="ov-num" id="ov-live">–</div><div class="ov-label">Providers live<small id="ov-live-sub">of – configured</small></div></div>
-    <div class="ov-item"><div class="ov-num ok" id="ov-healthy">–</div><div class="ov-label">Healthy<small>quota &lt; 70%</small></div></div>
-    <div class="ov-item"><div class="ov-num warn" id="ov-warn">–</div><div class="ov-label">Elevated<small>70–90% used</small></div></div>
-    <div class="ov-item"><div class="ov-num crit" id="ov-crit">–</div><div class="ov-label">Critical / down<small>&gt; 90% or error</small></div></div>
+    <div class="ov-item"><div class="ov-num ok" id="ov-healthy">–</div><div class="ov-label">Healthy<small>lasts to the reset</small></div></div>
+    <div class="ov-item"><div class="ov-num warn" id="ov-warn">–</div><div class="ov-label">Elevated<small>a busy hour would end it</small></div></div>
+    <div class="ov-item"><div class="ov-num crit" id="ov-crit">–</div><div class="ov-label">At risk / down<small>runs out at this pace</small></div></div>
     <div class="ov-item"><div class="ov-num small" id="ov-reset">–</div><div class="ov-label">Next quota reset<small id="ov-reset-sub"></small></div></div>
     <div class="ov-item"><div class="ov-num small" id="ov-balance">–</div><div class="ov-label">Pay-as-you-go<small id="ov-payg-sub">pay-as-you-go</small></div></div>
   </section>
@@ -254,6 +259,42 @@ function primaryMetric(metrics){
   return cand[0];
 }
 
+// Burn figures come ready-made from /api/providers — the model lives in
+// src/risk.ts and is computed once per poll, not once per viewer.
+const RANK={crit:2,warn:1,ok:0};
+const riskWord=l=>l==='crit'?'at risk':l==='warn'?'watch':'ok';
+const fmtRate=r=>r>0&&r<0.05?'<0.1%/h':(r>=10?Math.round(r):Math.round(r*10)/10)+'%/h';
+function fmtHours(h){ if(h===null||h===undefined||!isFinite(h))return '–'; if(h>=48)return (h/24).toFixed(1)+'d'; if(h>=1)return (Math.round(h*10)/10)+'h'; return Math.round(h*60)+'m'; }
+
+// What the card is really telling you: at this pace, how long does it last.
+// Named windows, because the window that runs out first is often not the one
+// headlining the card.
+function burnLine(p){
+  const r=p.risk&&p.risk.binding; if(!r)return '';
+  const lvl=p.risk.level, rate=r.ratePerHour, peak=r.peakRatePerHour;
+  const w=`<span class="w">${pretty(p.risk.metric).replace(/ Quota$/,'')}</span>`;
+  if(rate>0){
+    let t=`<b class="${lvl}">${fmtRate(rate)}</b> now · empty in <b class="${lvl}">${fmtHours(r.headroomHours)}</b>`;
+    // only when a resumed burst would actually beat the reset
+    if(peak>rate&&r.peakHeadroomHours!=null&&r.horizonHours&&r.peakHeadroomHours<r.horizonHours) t+=` · ${fmtHours(r.peakHeadroomHours)} at peak ${fmtRate(peak)}`;
+    return `<div class="burn">${w}${t}</div>`;
+  }
+  if(peak>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> if it resumes</div>`;
+  return `<div class="burn">${w}no usage in the last 24h</div>`;
+}
+
+// At-risk cards first, otherwise configured order — the page stays put unless
+// something actually changed state.
+function cardRank(p){
+  if(p.parked)return -1;
+  const lf=p.lastFetch;
+  if(lf&&lf.error)return 2;
+  if(p.risk)return RANK[p.risk.level];
+  const pg=cache[p.id]&&cache[p.id].payg;
+  if(pg&&pg.ready)return RANK[pg.lvl]||0;
+  return 0;
+}
+
 function sparkSVG(points,color){ if(!points||points.length<2)return ''; const w=110,h=30,mn=Math.min(...points),mx=Math.max(...points),span=(mx-mn)||1,step=w/(points.length-1); const pts=points.map((p,i)=>`${(i*step).toFixed(1)},${(h-3-((p-mn)/span)*(h-6)).toFixed(1)}`).join(' '); return `<svg class="spark" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" stroke="${color}" opacity="0.85"/></svg>`; }
 
 // `anchors` is {last,base,sinceFirst} from /api/summary — the two samples the
@@ -295,7 +336,8 @@ function injectCached(){
 function renderProviders(){
   const el=document.getElementById('providers');
   let healthy=0,warn=0,crit=0,live=0; nextReset=null;
-  const html=providersData.map((p,i)=>{
+  const ordered=providersData.map((p,i)=>({p,i})).sort((a,b)=>cardRank(b.p)-cardRank(a.p)||a.i-b.i).map(x=>x.p);
+  const html=ordered.map((p,i)=>{
     const accent=colorFor(p.id); const lf=p.lastFetch; const settled=firstBuildDone?' settled':'';
     if(p.parked){
       return `<div class="card down${settled}" style="--accent:${accent}">
@@ -314,7 +356,11 @@ function renderProviders(){
     const prim=primaryMetric(lf.metrics); const mode=paygMode(p);
     let lvl,pct;
     if(mode){ lvl='ok'; pct=null; } else { pct=prim&&prim.percent!==null?prim.percent:null; lvl=pct===null?'ok':levelOf(pct); }
-    if(!mode||mode!=='spend'){ if(lvl==='ok')healthy++; else if(lvl==='warn')warn++; else crit++; }
+    // The card's status is the risk of the window that runs out first, which
+    // already refuses to read better than the raw fill level; the percentage
+    // keeps colouring the number and the bar.
+    const rlvl=p.risk?p.risk.level:lvl;
+    if(!mode||mode!=='spend'){ if(rlvl==='ok')healthy++; else if(rlvl==='warn')warn++; else crit++; }
     for(const m of lf.metrics){ if(m.resetsAt){ if(nextReset===null||m.resetsAt<nextReset.ts) nextReset={ts:m.resetsAt,provider:p.name,metric:m.name}; } }
 
     let bigRow, barHtml, chipHtml;
@@ -326,16 +372,20 @@ function renderProviders(){
       const bigVal=pct===null?fmtNum(prim?prim.total:null):(pct<10?pct.toFixed(1):Math.round(pct));
       const bigUnit=pct===null?(prim?prim.unit:''):'%';
       const side=prim&&prim.used!==null?`<div class="big-used">${fmtNum(prim.used)} used</div><div class="big-total">of ${fmtNum(prim.total)} ${prim.unit}${prim.window?' · '+prim.window:''}</div>`:`<div class="big-used">available</div><div class="big-total">${prim?prim.unit:''}${prim&&prim.window?' · '+prim.window:' · balance'}</div>`;
-      bigRow=`<div class="big-row"><div class="big-pct ${lvl}">${bigVal}<span class="unit">${bigUnit}</span></div><div class="big-side">${side}</div></div>`;
-      barHtml=pct!==null?`<div class="bar"><div class="fill ${lvl}" style="width:${Math.min(pct,100)}%"></div></div>`:'';
-      chipHtml=`<span class="status-chip"><span class="dot ${lvl}"></span>${lvl==='ok'?'ok':lvl}</span>`;
+      // Coloured by risk, not by how full it is: a green 41% beside an "at risk"
+      // chip is read as green. The risk never reads better than the fill level,
+      // so nothing the colour used to say is lost.
+      bigRow=`<div class="big-row"><div class="big-pct ${rlvl}">${bigVal}<span class="unit">${bigUnit}</span></div><div class="big-side">${side}</div></div>`;
+      barHtml=pct!==null?`<div class="bar"><div class="fill ${rlvl}" style="width:${Math.min(pct,100)}%"></div></div>`:'';
+      barHtml+=burnLine(p);
+      chipHtml=`<span class="status-chip"><span class="dot ${rlvl}"></span>${riskWord(rlvl)}</span>`;
     }
     const planBadge=lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:(mode?`<span class="plan-badge">${mode}</span>`:'');
     // Every window carries its own countdown: the headline is only one of a
     // provider's limits, and the one that blocks work next is often a sub-row.
     // Tagging with data-reset is enough — tickCountdowns() updates them all.
     const subs=lf.metrics.filter(m=>m!==prim);
-    const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=levelOf(sp);const rst=m.resetsAt?`<b data-reset="${m.resetsAt}">${fmtCountdown(m.resetsAt-Date.now())||'now'}</b>`:'';return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span><span class="rst">${rst}</span></div>`;}).join('')}</div>`:'';
+    const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=m.risk?m.risk.level:levelOf(sp);const rst=m.resetsAt?`<b data-reset="${m.resetsAt}">${fmtCountdown(m.resetsAt-Date.now())||'now'}</b>`:'';return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span><span class="rst">${rst}</span></div>`;}).join('')}</div>`:'';
     const resetSpan=prim&&prim.resetsAt?`resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`:'<span style="color:var(--faint)">no reset window</span>';
     return `<div class="card${settled}" style="--accent:${accent}">
       <div class="card-top"><div class="pname"><span class="pdot"></span>${esc(p.name)}</div>

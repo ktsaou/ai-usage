@@ -160,11 +160,19 @@ Plan from `instanceName` (e.g. `Coding Plan Pro`).
 
 | Metric | Unit | Window | Source fields |
 |---|---|---|---|
-| `5h_quota` | `requests` | 5h | `per5HourUsedQuota` / `per5HourTotalQuota`, reset `per5HourQuotaNextRefreshTime` |
-| `weekly_quota` | `requests` | weekly | `perWeek*` equivalents |
-| `monthly_quota` | `requests` | monthly | `perBillMonth*` equivalents |
+| `5h_quota` | `requests` | 5h | `per5HourUsedQuota` / `per5HourTotalQuota` — **rolling**, no reset emitted |
+| `weekly_quota` | `requests` | weekly | `perWeek*` equivalents, reset `perWeekQuotaNextRefreshTime` |
+| `monthly_quota` | `requests` | monthly | `perBillMonth*` equivalents, reset `perBillMonthQuotaNextRefreshTime` |
 
 Windows whose total is absent or `<= 0` are **skipped**, not emitted as 0-of-0.
+
+**The 5h window is a trailing window, not one that resets** (verified over 14 days
+of stored history: 511 rises and 515 falls in `per5HourUsedQuota`, and
+`per5HourQuotaNextRefreshTime` equal to the server's current time on every one of
+~16k samples). It is emitted with `rolling: true`, no `resetsAt`, and a `note`
+saying so. Treating its refresh time as a reset made it win every "soonest reset"
+comparison with a countdown permanently at zero — the dashboard's next-reset tile
+was pinned to it. The weekly and monthly windows are ordinary fixed windows.
 
 ### Alibaba Token Plan (`type: alibaba-token`)
 
@@ -181,9 +189,76 @@ Percentages arrive as **0..1 fractions** (percent used) and are multiplied by
 from `errorCode` (`BailianGateway.Login.NotLogined`), never from a redirect —
 the console does not redirect when logged out.
 
+## Exhaustion risk
+
+A percentage says how much is left, not whether it survives the day. These
+subscriptions are consumed by a team through a shared gateway, so the pace is
+invisible to any one person: measured over 14 days of this deployment's history,
+usage is idle 37-74% of hours, while the worst single hour consumed 55% of a 5h
+window and 20.8% of a weekly one. Every quota metric therefore carries a `risk`
+object, derived in `src/risk.ts` from stored history.
+
+Definitions — all rates are **percent of that quota per hour**, so they compare
+across providers whatever the provider counts in:
+
+| Field | Meaning |
+|---|---|
+| `ratePerHour` | consumption over the last hour |
+| `peakRatePerHour` | the largest rise inside any single clock hour of the last 24 |
+| `headroomHours` | hours until exhausted at `ratePerHour`; `null` when nothing is burning |
+| `peakHeadroomHours` | the same at `peakRatePerHour` — what a resumed burst costs |
+| `horizonHours` | hours until the reset; for a rolling window, one window length |
+| `burnRatio` | `ratePerHour` over `remaining/horizonHours`; above 1 exhausts before the reset |
+| `rolling` | this window decays instead of resetting |
+| `level` | `ok` / `warn` / `crit` |
+
+Level rules:
+
+- **crit** — the quota is exhausted, or the rate over the last hour *and* over a
+  confirming longer lookback (`min(6h, max(75m, windowLength/4))`) both exceed
+  what the quota can afford until it resets. Both lookbacks must agree: one busy
+  minute otherwise flips a card to red and back, on a page meant to stay open.
+- **warn** — the peak hour would exhaust the quota within
+  `min(horizonHours, 12h)`. The 12h cap is what makes the peak test meaningful:
+  projecting a busy hour across a whole month flags everything, and the question
+  being answered is "does this survive tonight".
+- The level **never reports better than the raw fill level** (70% elevated, 90%
+  critical). An almost-full quota that happens to be idle is not "ok".
+
+Anchors are always constrained to one window instance (`resets_at`), because a
+pair spanning a reset reads the drop to zero as a rate. A rolling window has no
+reset instant, so its whole history is one instance.
+
+A provider's risk is the risk of the window that binds first: worst level, then
+least headroom. `secondary` quotas keep their own risk but never speak for the
+provider. A failed poll leaves the previous risk in place rather than inventing
+a reassuring one.
+
+Backtested over this deployment's own 14 days: three windows actually reached
+100% (kimi 5h, kimi weekly, alibaba-token weekly). The rule above warned before
+all three — 75 minutes, 5.4 days and 2.1 days ahead — with no misses, and fired
+on 0-1.1% of polled minutes for the 5h windows. Windows where it warned and no
+exhaustion followed are mostly cases where the pace really was on track and the
+team then eased off, which is what a leading indicator is for; the wording on
+every surface is therefore conditional ("at this pace"), never a prediction.
+
+The parameters (1h short lookback, the confirming lookback above, 24h peak
+window, 12h planning horizon) were chosen by that backtest. Changing them
+without re-running it is guesswork.
+
 ## Cross-cutting rendering
 
 - **MCP percent metrics**: `N% used, M% remaining resets <RFC3339> (in <countdown>)`.
+- **MCP burn figures**: `query_provider` adds an indented line per metric —
+  `risk <ok|elevated|at risk> · burn N%/h · peak 24h M%/h · headroom Xh · Yh at
+  peak pace · burn ratio Z.ZZx`. `list_providers` adds the same line for each
+  provider's binding window, prefixed with that window's name and deadline, plus
+  one legend line defining burn ratio and headroom. A rate that rounds to zero
+  prints `<0.1%/h`; a rate of exactly zero prints `idle` and no headroom. The
+  peak-pace headroom is printed only when a resumed burst would actually beat the
+  deadline, otherwise it is a large number about nothing. Neither tool ranks
+  providers or recommends one: which subscription to use depends on what the
+  caller is about to run, so the tools report status only.
 - **Metric self-description**: a metric may carry `note` (what the quota
   actually measures), `breakdown` (per-item split of `used`) and `secondary`
   (ineligible for the card headline). The MCP renders
@@ -200,6 +275,18 @@ the console does not redirect when logged out.
   percent used** (most exhausted / binding constraint), not a fixed window
   preference. Non-primary metrics render as sub-bars. On Kimi this headlines the
   weekly quota when it is near-exhausted.
+- **Dashboard risk**: the status chip reads `ok` / `watch` / `at risk` from the
+  provider's risk, and the headline number, its bar and every sub-row bar are
+  coloured by risk rather than by fill — a green 41% beside an "at risk" chip is
+  read as green, and since the risk never reports better than the fill level,
+  nothing the colour previously said is lost. Under the bar, a **burn line**
+  names the binding window and states the pace and what it leaves:
+  `WEEKLY 3%/h now · empty in 19.7h · 11.8h at peak 5%/h`, or
+  `5H idle · worst hour 0.7%/h → 5.8d if it resumes`, or `no usage in the last
+  24h`. At-risk cards are promoted above healthy ones; within a level the
+  configured order is kept, so the page only moves when something changes state.
+  The overview counters follow the same levels ("lasts to the reset", "a busy
+  hour would end it", "runs out at this pace").
 - **Headline eligibility**: a metric flagged `secondary` never headlines a card —
   it measures something other than the plan's usage, so its percentage is not
   comparable with the quota windows. Only the provider module sets this; the
@@ -227,8 +314,20 @@ the console does not redirect when logged out.
   `sinceFirst: true` when history is shorter than the window. Providers whose
   last poll failed are omitted, so the page keeps showing their previous values.
 - **Serving size**: a dashboard refresh is `/api/providers` + `/api/summary`,
-  ~1.1 KB gzipped in total. `GET /api/history/:id?days=N` still returns raw
-  samples for manual export; nothing polls it.
+  ~2.0 KB gzipped in total over six subscription providers (1.4 KB + 0.6 KB;
+  the risk fields are about eight numbers per metric and grew the refresh by
+  roughly 0.9 KB). `GET /api/history/:id?days=N` still returns raw samples for
+  manual export; nothing polls it.
+- **Where risk is computed**: once per poll, in the scheduler, cached in memory.
+  The dashboard, `/metrics` and the MCP all read that cache, so the three small
+  indexed queries per metric are paid once a minute rather than once per viewer
+  per request.
+- **Prometheus**: alongside `ai_usage_{percent,used,total,remaining}`, each
+  quota metric exports `ai_usage_burn_rate_percent_per_hour`,
+  `ai_usage_peak_burn_rate_percent_per_hour`, `ai_usage_burn_ratio`,
+  `ai_usage_headroom_hours` and `ai_usage_risk_level` (0 ok, 1 elevated, 2 at
+  risk), with the same labels. Headroom is `+Inf` when nothing is burning, so
+  the series never disappears exactly when an alert expression needs it.
 - **Retention**: samples older than `retentionDays` (default 90) are deleted
   once a day. `/metrics` and the MCP read only the latest sample, so retention
   affects export only.

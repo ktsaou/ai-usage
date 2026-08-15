@@ -24,7 +24,12 @@ export function metric(
   unit: string,
   window: string | null = null,
   resetsAt: number | null = null,
-  extra: { note?: string; breakdown?: Record<string, number>; secondary?: boolean } = {}
+  extra: {
+    note?: string;
+    breakdown?: Record<string, number>;
+    secondary?: boolean;
+    rolling?: boolean;
+  } = {}
 ): UsageMetric {
   const remaining = used !== null && total !== null ? total - used : null;
   const percent =

@@ -27,6 +27,7 @@ npm run mcp            # MCP stdio server
 npm run agent          # remote agent (reads Claude/Codex OAuth, POSTs to daemon)
 npm run login          # headed login for the browser-session providers (needs a screen)
 npm run sync:profile   # copy the logged-in profile to the daemon host, restart, verify
+npm test               # unit tests (risk model + history queries), no network
 npm run test:all       # live-fetch all non-parked providers; exits non-zero on failure
 npm run test:all zai   # test one provider by id (parked ones only run when named)
 sudo bash install.sh   # install to /opt/ai-usage, create user, enable service
@@ -52,7 +53,19 @@ Runtime state on the daemon host lives under `/opt/ai-usage`: `data/` (SQLite), 
 
 Per-provider field semantics (metric names, units, windows, reset-time source, unlimited quotas) are documented in `.agents/sow/specs/provider-quota-semantics.md` — the source of truth when changing fetchers or MCP/dashboard rendering.
 
-A metric may carry `note`, `breakdown` and `secondary` — descriptive fields set by the provider module, passed through the API, and never stored or exported. `secondary` means "this measures something other than the plan's usage, so it must not headline a card"; only the fetcher knows that, so renderers must never special-case a metric name to decide it. Card headline selection lives in `primaryMetric()` in both `src/server.ts` and `src/dashboard.html` (the dashboard has no build step and cannot import) — change both together.
+A metric may carry `note`, `breakdown`, `secondary` and `rolling` — descriptive fields set by the provider module, passed through the API, and never stored or exported. `secondary` means "this measures something other than the plan's usage, so it must not headline a card"; only the fetcher knows that, so renderers must never special-case a metric name to decide it. Card headline selection lives in `primaryMetric()` in both `src/server.ts` and `src/dashboard.html` (the dashboard has no build step and cannot import) — change both together.
+
+## Exhaustion Risk
+
+Every quota metric carries a burn rate, the headroom it implies in hours, and a risk level, computed in `src/risk.ts` and served on `/api/providers`, `/metrics` and the MCP. The model, its parameters and the backtest that chose them are in the spec. Three rules that are easy to break:
+
+- **Rates are measured within one window instance.** A pair of samples spanning a reset reads the drop to zero as a rate. `db.metricAnchors()` constrains on `resets_at` for exactly this reason.
+- **A window that "refreshes" is not necessarily a window that resets.** One provider reports a trailing 5h window whose refresh time is always *now*; extrapolating that to a reset is meaningless, and treating it as a reset pinned the dashboard's next-reset tile to zero. Check whether `used` ever falls before believing a reset timestamp. Fetchers declare this with `rolling: true` and emit no `resetsAt`.
+- **The parameters came from a backtest over real stored history**, not from taste. Re-run it before changing them: replay `/api/history/:id?days=14` into a temp database, walk the samples, and weigh warnings before real exhaustions against how much of the time the alarm is on. Tuning by intuition produces something that either never fires or is permanently amber.
+
+Risk is derived once per poll in the scheduler and cached. Never move it into a request handler: the dashboard is meant to stay open, so per-request work is paid per viewer per minute, forever.
+
+Unit tests run with `npm test` (`node --test`, no framework). They cover the model and the SQL that feeds it; the live providers stay in `npm run test:all`.
 
 ## Serving Cost
 

@@ -12,12 +12,24 @@ import { DB, type ValueColumn } from "./db.js";
 import { Scheduler } from "./scheduler.js";
 import { renderMetrics } from "./metrics.js";
 import { buildMcpServer, type McpBackend } from "./mcp-server.js";
+import type { ProviderRisk } from "./risk.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** Attaches each metric's burn-rate risk, so a consumer never has to join them. */
+function withRisk(metrics: UsageMetric[], risk: ProviderRisk | undefined) {
+  return metrics.map((m) => ({ ...m, risk: risk?.metrics[m.name] ?? null }));
+}
+
+/** The rollup without the per-metric map, which is sent alongside the metrics. */
+function providerLevelRisk({ metrics, ...rest }: ProviderRisk) {
+  return rest;
+}
 
 export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
   const providers = config.providers.map((p) => {
     const last = scheduler.getLastResult(p.id);
+    const risk = scheduler.getRisk(p.id);
     return {
       id: p.id,
       type: p.type,
@@ -29,8 +41,16 @@ export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
       monthlyBudget: p.monthlyBudget ?? null,
       balanceWarnDays: p.balanceWarnDays ?? null,
       balanceCritDays: p.balanceCritDays ?? null,
+      // The provider-level risk is the risk of whichever window binds first;
+      // `metrics` carries it split out again per window.
+      risk: risk ? providerLevelRisk(risk) : null,
       lastFetch: last
-        ? { fetchedAt: last.fetchedAt, error: last.error, plan: last.plan, metrics: last.metrics }
+        ? {
+            fetchedAt: last.fetchedAt,
+            error: last.error,
+            plan: last.plan,
+            metrics: withRisk(last.metrics, risk),
+          }
         : null,
     };
   });
@@ -93,7 +113,13 @@ export function buildInProcessBackend(config: AppConfig, scheduler: Scheduler): 
     listProviders: async () => buildProvidersPayload(config, scheduler),
     queryProvider: async (id: string) => {
       const r = await scheduler.queryNow(id);
-      return { ...r, parked: !!config.providers.find((p) => p.id === id)?.parked };
+      const risk = scheduler.getRisk(id);
+      return {
+        ...r,
+        metrics: withRisk(r.metrics, risk),
+        risk: risk ? providerLevelRisk(risk) : null,
+        parked: !!config.providers.find((p) => p.id === id)?.parked,
+      };
     },
   };
 }
@@ -180,7 +206,7 @@ export function createServer(config: AppConfig, db: DB, scheduler: Scheduler) {
   });
 
   app.get("/metrics", (c) => {
-    const body = renderMetrics(db);
+    const body = renderMetrics(db, (id) => scheduler.getRisk(id));
     return c.text(body, 200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" });
   });
 
