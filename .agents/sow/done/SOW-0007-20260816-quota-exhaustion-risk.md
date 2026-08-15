@@ -2,9 +2,9 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: design approved by the user; implementing.
+Sub-state: implemented, tested, deployed to the daemon host and verified live.
 
 ## Requirements
 
@@ -353,8 +353,34 @@ Real-use evidence:
   session (initialize + `tools/call`), and the dashboard rendered in a headless
   browser. No provider was polled and no browser profile was touched, so the
   daemon host's sessions were never at risk.
-- Not yet deployed. Deploying to the daemon host is the user's call and is the
-  only remaining evidence gap.
+- Deployed to the daemon host on the user's instruction (`git pull` +
+  `install.sh`, which restarts the service). Verified live afterwards:
+  - service active, no errors in the journal, all eight providers polling;
+  - the browser-session providers came back after the restart, so the session
+    save/restore path still works;
+  - `/api/providers` carries risk per metric and per provider; `/metrics` carries
+    all five gauges;
+  - live MCP session over HTTP: `list_providers` prints each provider's binding
+    window with its deadline and burn summary;
+  - the rolling window's rate appeared 11 minutes after the first sample carrying
+    no reset instant, which is the designed 10-minute minimum span plus a poll —
+    until then it correctly reported no rate rather than a fabricated one, and
+    `ai_usage_headroom_hours` rendered `+Inf`;
+  - two providers were genuinely at risk at deploy time (a weekly window with
+    3.0h of headroom against 4.6 days until its reset, ratio 37x; another with
+    13.8h against 2.6 days, ratio 4.5x), which is the case this SOW exists for.
+
+Live-data finding, fixed in the same SOW:
+
+- OpenRouter's `credits` metric carries a percentage (lifetime spend against
+  credits purchased), so it acquired a risk level like any other quota — and at
+  87% it read `elevated`. Its card, however, shows spend and pace, not that
+  level, so ordering by it promoted a card whose own chip read `ok`. Pay-as-you-go
+  cards are now ranked by the level they display. The risk itself is kept in the
+  API, MCP and Prometheus, where it is accurate and useful.
+- Worth noting for the user, not implemented here: nothing on the OpenRouter card
+  says 87% of purchased credits are spent. Redesigning the pay-as-you-go card is
+  outside this SOW's scope.
 
 Reviewer findings:
 
@@ -449,16 +475,24 @@ A pre-existing defect was found and fixed on the way: Alibaba Coding's 5h bucket
 is a trailing window whose "next refresh" is always now, which had pinned the
 dashboard's next-reset tile to zero.
 
-Not deployed — that is the user's call.
+Deployed and verified live on the daemon host.
 
 ## Lessons Extracted
 
-See Validation → Lessons.
+See Validation → Lessons. One more, learned at deployment:
+
+- Offline replay of stored history validated everything except the one provider
+  whose shape the replay set did not contain. The pay-as-you-go provider that
+  turned out to carry a percentage only appeared once the code ran against all
+  eight configured providers. Replay proves the model; only the real deployment
+  proves the coverage.
 
 ## Followup
 
-- Deploy to the daemon host and confirm the first polls populate risk (user's
-  decision).
+- Nothing on the OpenRouter card states that 87% of purchased credits are spent,
+  even though the number is now in the API. Tracked here as an observation for
+  the user to decide on; not deferred work of this SOW, whose scope was
+  subscription quotas.
 
 ## Regression Log
 
