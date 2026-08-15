@@ -285,6 +285,10 @@ without re-running it is guesswork.
   `5H idle · worst hour 0.7%/h → 5.8d if it resumes`, or `no usage in the last
   24h`. At-risk cards are promoted above healthy ones; within a level the
   configured order is kept, so the page only moves when something changes state.
+  Pay-as-you-go cards are ranked by the runway level they actually display, not
+  by their burn-rate risk — OpenRouter's `credits` metric carries a percentage
+  (lifetime spend against credits purchased), so it has a risk level, but its
+  card shows spend and pace instead.
   The overview counters follow the same levels ("lasts to the reset", "a busy
   hour would end it", "runs out at this pace").
 - **Headline eligibility**: a metric flagged `secondary` never headlines a card —

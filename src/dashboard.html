@@ -289,10 +289,11 @@ function cardRank(p){
   if(p.parked)return -1;
   const lf=p.lastFetch;
   if(lf&&lf.error)return 2;
-  if(p.risk)return RANK[p.risk.level];
-  const pg=cache[p.id]&&cache[p.id].payg;
-  if(pg&&pg.ready)return RANK[pg.lvl]||0;
-  return 0;
+  // A pay-as-you-go card shows its own runway level, not the burn-rate risk, so
+  // rank it by what it displays — promoting a card that reads "ok" is worse than
+  // leaving it in place.
+  if(paygMode(p)){ const pg=cache[p.id]&&cache[p.id].payg; return pg&&pg.ready?(RANK[pg.lvl]||0):0; }
+  return p.risk?RANK[p.risk.level]:0;
 }
 
 function sparkSVG(points,color){ if(!points||points.length<2)return ''; const w=110,h=30,mn=Math.min(...points),mx=Math.max(...points),span=(mx-mn)||1,step=w/(points.length-1); const pts=points.map((p,i)=>`${(i*step).toFixed(1)},${(h-3-((p-mn)/span)*(h-6)).toFixed(1)}`).join(' '); return `<svg class="spark" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" stroke="${color}" opacity="0.85"/></svg>`; }
