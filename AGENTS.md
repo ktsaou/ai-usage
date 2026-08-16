@@ -53,7 +53,9 @@ Runtime state on the daemon host lives under `/opt/ai-usage`: `data/` (SQLite), 
 
 Per-provider field semantics (metric names, units, windows, reset-time source, unlimited quotas) are documented in `.agents/sow/specs/provider-quota-semantics.md` — the source of truth when changing fetchers or MCP/dashboard rendering.
 
-A metric may carry `note`, `breakdown`, `secondary` and `rolling` — descriptive fields set by the provider module, passed through the API, and never stored or exported. `secondary` means "this measures something other than the plan's usage, so it must not headline a card"; only the fetcher knows that, so renderers must never special-case a metric name to decide it. Card headline selection lives in `primaryMetric()` in both `src/server.ts` and `src/dashboard.html` (the dashboard has no build step and cannot import) — change both together.
+A metric may carry `note`, `breakdown`, `secondary`, `rolling`, `backstopped` and `expiresAt`, and a result may carry `subscription` — descriptive fields set by the provider module, passed through the API, and never stored. `secondary` means "this measures something other than the plan's usage"; `backstopped` means "this window is spent but another pool covers it, so it is not the constraint". Neither may headline a card or drive the provider's risk. Only the fetcher knows either, so renderers must never special-case a metric name to decide it. Card headline selection lives in `primaryMetric()` in both `src/server.ts` and `src/dashboard.html` (the dashboard has no build step and cannot import) — change both together.
+
+Before adding a field, check what the vendor's console actually shows. One provider's quota reads 100% while the work continues from packs bought separately, reported by an endpoint the fetcher never called; the monitor said "blocked" for as long as nobody looked. When a card contradicts the vendor's own page, the missing data is usually one API call away — capture the console's traffic rather than guessing (see SOW-0008 for the method).
 
 ## Exhaustion Risk
 

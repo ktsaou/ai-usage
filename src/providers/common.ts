@@ -1,10 +1,11 @@
-import type { ProviderConfig, ProviderResult, UsageMetric } from "../types.js";
+import type { ProviderConfig, ProviderResult, SubscriptionInfo, UsageMetric } from "../types.js";
 
 export function result(
   config: ProviderConfig,
   metrics: UsageMetric[],
   plan: string | null = null,
-  error: string | null = null
+  error: string | null = null,
+  subscription: SubscriptionInfo | null = null
 ): ProviderResult {
   return {
     providerId: config.id,
@@ -14,6 +15,7 @@ export function result(
     metrics,
     fetchedAt: Date.now(),
     error,
+    subscription,
   };
 }
 
@@ -29,6 +31,8 @@ export function metric(
     breakdown?: Record<string, number>;
     secondary?: boolean;
     rolling?: boolean;
+    backstopped?: boolean;
+    expiresAt?: number | null;
   } = {}
 ): UsageMetric {
   const remaining = used !== null && total !== null ? total - used : null;

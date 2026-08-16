@@ -247,12 +247,13 @@ let cache = {};          // id -> { sparkSVG, payg }
 let serviceMeta = {};    // { name, tagline }
 let firstBuildDone = false;
 
-// The most exhausted window, ignoring quotas flagged `secondary` — those measure
-// something other than plan usage (z.ai's tool calls), so their percentage is not
-// comparable. Mirrors primaryMetric() in src/server.ts; keep the two in step.
+// The most exhausted window, ignoring quotas flagged `secondary` (they measure
+// something other than plan usage, like z.ai's tool calls) and `backstopped`
+// ones (spent, but another pool covers them, so they are not the constraint).
+// Mirrors primaryMetric() in src/server.ts; keep the two in step.
 function primaryMetric(metrics){
   if(!metrics||!metrics.length)return null;
-  const eligible=metrics.filter(m=>!m.secondary);
+  const eligible=metrics.filter(m=>!m.secondary&&!m.backstopped);
   const cand=eligible.length?eligible:metrics;   // never leave a card headless
   const pct=cand.filter(m=>m.percent!==null);
   if(pct.length)return pct.reduce((a,b)=>b.percent>a.percent?b:a);
@@ -281,6 +282,15 @@ function burnLine(p){
   }
   if(peak>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> if it resumes</div>`;
   return `<div class="burn">${w}no usage in the last 24h</div>`;
+}
+
+// The plan's own deadline. A subscription ending without auto-renewal takes
+// every quota on it, so it gets its own line rather than hiding in a tooltip.
+function planLine(p){
+  const s=p.risk&&p.risk.subscription; if(!s||!s.endsAt)return '';
+  const lvl=s.level||'ok';
+  const renew=s.autoRenew===true?'auto-renews':s.autoRenew===false?'auto-renewal off':'';
+  return `<div class="burn"><span class="w">Plan</span>ends in <b class="${lvl}" data-reset="${s.endsAt}">${fmtCountdown(s.endsAt-Date.now())||'now'}</b>${renew?` · <b class="${s.autoRenew===false?lvl:''}">${renew}</b>`:''}${s.status&&s.status!=='VALID'?` · ${esc(s.status)}`:''}</div>`;
 }
 
 // At-risk cards first, otherwise configured order — the page stays put unless
@@ -378,7 +388,7 @@ function renderProviders(){
       // so nothing the colour used to say is lost.
       bigRow=`<div class="big-row"><div class="big-pct ${rlvl}">${bigVal}<span class="unit">${bigUnit}</span></div><div class="big-side">${side}</div></div>`;
       barHtml=pct!==null?`<div class="bar"><div class="fill ${rlvl}" style="width:${Math.min(pct,100)}%"></div></div>`:'';
-      barHtml+=burnLine(p);
+      barHtml+=burnLine(p)+planLine(p);
       chipHtml=`<span class="status-chip"><span class="dot ${rlvl}"></span>${riskWord(rlvl)}</span>`;
     }
     const planBadge=lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:(mode?`<span class="plan-badge">${mode}</span>`:'');
@@ -386,8 +396,13 @@ function renderProviders(){
     // provider's limits, and the one that blocks work next is often a sub-row.
     // Tagging with data-reset is enough — tickCountdowns() updates them all.
     const subs=lf.metrics.filter(m=>m!==prim);
-    const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=m.risk?m.risk.level:levelOf(sp);const rst=m.resetsAt?`<b data-reset="${m.resetsAt}">${fmtCountdown(m.resetsAt-Date.now())||'now'}</b>`:'';return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span><span class="rst">${rst}</span></div>`;}).join('')}</div>`:'';
-    const resetSpan=prim&&prim.resetsAt?`resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`:'<span style="color:var(--faint)">no reset window</span>';
+    const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=m.risk?m.risk.level:levelOf(sp);const dl=m.resetsAt||m.expiresAt;const rst=dl?`<b data-reset="${dl}">${fmtCountdown(dl-Date.now())||'now'}</b>`:'';return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span><span class="rst">${rst}</span></div>`;}).join('')}</div>`:'';
+    // Some allowances expire rather than reset — nothing comes back afterwards.
+    const resetSpan=prim&&prim.resetsAt
+      ?`resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`
+      :prim&&prim.expiresAt
+        ?`expires in <b data-reset="${prim.expiresAt}">${fmtCountdown(prim.expiresAt-Date.now())||'now'}</b>`
+        :'<span style="color:var(--faint)">no reset window</span>';
     return `<div class="card${settled}" style="--accent:${accent}">
       <div class="card-top"><div class="pname"><span class="pdot"></span>${esc(p.name)}</div>
         <div style="display:flex;gap:8px;align-items:center">${planBadge}${chipHtml}</div></div>

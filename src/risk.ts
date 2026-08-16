@@ -1,5 +1,5 @@
 import type { MetricAnchors } from "./db.js";
-import type { ProviderResult, UsageMetric } from "./types.js";
+import type { ProviderResult, SubscriptionInfo, UsageMetric } from "./types.js";
 
 /**
  * Will this quota run out before it resets?
@@ -37,6 +37,14 @@ const MIN_SPAN_MS = 10 * 60000;
 const ELEVATED_PERCENT = 70;
 const CRITICAL_PERCENT = 90;
 
+/**
+ * A plan that ends soon and will not renew itself takes the quota with it, so it
+ * is a risk of the same kind — but only when nobody has to act. With
+ * auto-renewal on, the end date is an accounting detail.
+ */
+const PLAN_EXPIRY_WARN_H = 7 * 24;
+const PLAN_EXPIRY_CRIT_H = 48;
+
 const WINDOW_MS: Record<string, number> = {
   "5h": 5 * H,
   daily: 24 * H,
@@ -63,11 +71,21 @@ export interface MetricRisk {
   rolling: boolean;
 }
 
+export interface SubscriptionRisk {
+  level: RiskLevel;
+  endsAt: number | null;
+  hoursLeft: number | null;
+  autoRenew: boolean | null;
+  status: string | null;
+}
+
 export interface ProviderRisk {
   level: RiskLevel;
   /** The window that binds first — the one the level came from. */
   metric: string | null;
   window: string | null;
+  /** The plan's own deadline, which can outrank every quota on it. */
+  subscription: SubscriptionRisk | null;
   /**
    * That window's figures, whole. Embedded rather than copied out field by
    * field, so a number added to `MetricRisk` cannot go missing here.
@@ -178,15 +196,34 @@ export function computeMetricRisk(
   };
 }
 
+export function computeSubscriptionRisk(
+  sub: SubscriptionInfo | null | undefined,
+  now: number
+): SubscriptionRisk | null {
+  if (!sub) return null;
+  const hoursLeft = sub.endsAt ? (sub.endsAt - now) / H : null;
+  let level: RiskLevel = "ok";
+  if (sub.status && sub.status !== "VALID") level = "crit";
+  // Anything but a confirmed "it renews" is treated as "it does not": the end
+  // date is real either way, and the alternative is silence while a plan runs out.
+  else if (sub.autoRenew !== true && hoursLeft !== null) {
+    if (hoursLeft <= PLAN_EXPIRY_CRIT_H) level = "crit";
+    else if (hoursLeft <= PLAN_EXPIRY_WARN_H) level = "warn";
+  }
+  return { level, endsAt: sub.endsAt, hoursLeft, autoRenew: sub.autoRenew, status: sub.status };
+}
+
 /** How soon this metric becomes a problem, for picking the binding window. */
 function urgency(r: MetricRisk): number {
   return Math.min(r.headroomHours ?? Infinity, r.peakHeadroomHours ?? Infinity);
 }
 
 /**
- * The risk of a provider is the risk of whichever window binds first. Quotas
- * flagged `secondary` measure something other than the plan's usage, so they
- * carry their own risk but never speak for the provider.
+ * The risk of a provider is the risk of whichever window binds first, or of the
+ * plan itself when that expires sooner than any quota runs out. Quotas flagged
+ * `secondary` measure something other than the plan's usage, and quotas flagged
+ * `backstopped` are spent but covered by another pool; both carry their own risk
+ * and neither speaks for the provider.
  */
 export function computeProviderRisk(
   history: RiskHistory,
@@ -200,11 +237,19 @@ export function computeProviderRisk(
     const r = computeMetricRisk(history, result.providerId, m, now);
     if (r) metrics[m.name] = r;
   }
+  const subscription = computeSubscriptionRisk(result.subscription, now);
 
-  const eligible = result.metrics.filter((m) => !m.secondary && metrics[m.name]);
+  const eligible = result.metrics.filter((m) => !m.secondary && !m.backstopped && metrics[m.name]);
   if (!eligible.length) {
-    if (!Object.keys(metrics).length) return null;
-    return { level: "ok", metric: null, window: null, binding: null, metrics };
+    if (!Object.keys(metrics).length && !subscription) return null;
+    return {
+      level: subscription?.level ?? "ok",
+      metric: null,
+      window: null,
+      subscription,
+      binding: null,
+      metrics,
+    };
   }
 
   const binding = eligible.reduce((a, b) => {
@@ -214,5 +259,12 @@ export function computeProviderRisk(
     return urgency(rb) < urgency(ra) ? b : a;
   });
   const r = metrics[binding.name];
-  return { level: r.level, metric: binding.name, window: binding.window, binding: r, metrics };
+  return {
+    level: subscription ? worst(r.level, subscription.level) : r.level,
+    metric: binding.name,
+    window: binding.window,
+    subscription,
+    binding: r,
+    metrics,
+  };
 }

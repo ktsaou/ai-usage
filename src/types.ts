@@ -24,6 +24,28 @@ export interface UsageMetric {
    * Only the provider module can tell — the API field naming does not.
    */
   rolling?: boolean;
+  /**
+   * This window is spent, but another quota on the same provider covers it, so
+   * it does not block work: the provider keeps serving from the other pool.
+   * Such a window must not headline a card or drive the provider's risk — it
+   * would report "blocked" while everything still works — but it keeps its own
+   * exhausted state. Only the provider module knows a backstop exists.
+   */
+  backstopped?: boolean;
+  /**
+   * When this allowance is lost, for quotas that expire instead of resetting.
+   * Unlike `resetsAt` nothing comes back afterwards.
+   */
+  expiresAt?: number | null;
+}
+
+/** The plan itself, as distinct from what it allows: when it ends, and whether it renews. */
+export interface SubscriptionInfo {
+  endsAt: number | null;
+  remainingDays: number | null;
+  autoRenew: boolean | null;
+  /** Provider's own word for it, e.g. `VALID`. */
+  status: string | null;
 }
 
 export interface ProviderResult {
@@ -34,6 +56,8 @@ export interface ProviderResult {
   metrics: UsageMetric[];
   fetchedAt: number;
   error: string | null;
+  /** Descriptive like the metric extras: passed through, never stored. */
+  subscription?: SubscriptionInfo | null;
 }
 
 export interface ProviderConfig {

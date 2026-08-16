@@ -176,16 +176,31 @@ was pinned to it. The weekly and monthly windows are ordinary fixed windows.
 
 ### Alibaba Token Plan (`type: alibaba-token`)
 
-`zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage`; plan from
-`.../v2/subscription` → `specCode` (e.g. `pro`).
+Three gateway calls: `…/v2/usage` (quota), `…/v2/addon/summary` (extra packs) and
+`…/v2/subscription` (the plan itself — `specCode`, plus the fields under
+"Subscription facts" below).
 
 | Metric | Unit | Window | Source fields |
 |---|---|---|---|
 | `5h_quota` | `%` | 5h | `per5HourPercentage`, reset `per5HourResetTime` |
 | `weekly_quota` | `%` | weekly | `per1WeekPercentage`, reset `per1WeekResetTime` |
+| `addon_credits` | `credits` | none | `totalCredits` / `remainingCredits`, expiry `nearestExpireTime`, `activeCount` in the note |
 
 Percentages arrive as **0..1 fractions** (percent used) and are multiplied by
-100. The gateway answers HTTP 200 even when logged out; session state is read
+100. **The plan no longer has a 5h window**: since 2026-08-06 the usage endpoint
+returns only `per1Week*` and the console shows a single 7-day quota. The metric
+is emitted only when the field is present, so it simply stopped appearing.
+
+**Extra usage packs** (`addon/summary`, request payload `{}`) are quota bought on
+top of the plan. The console spends the plan quota first and then these, stating
+"you can continue using the service after reaching the quota" — so a plan window
+at 100% with credits left here does **not** stop work. The fetcher therefore
+marks such a window `backstopped`, and it is the reason that flag exists. The
+add-on metric has no window and does not reset: it carries `expiresAt`
+(the nearest pack's expiry), not `resetsAt`.
+
+`reset-card/list` also exists (a different kind of top-up) and returns an empty
+list; it is deliberately not parsed until a populated sample is available. The gateway answers HTTP 200 even when logged out; session state is read
 from `errorCode` (`BailianGateway.Login.NotLogined`), never from a redirect —
 the console does not redirect when logged out.
 
@@ -230,9 +245,32 @@ pair spanning a reset reads the drop to zero as a rate. A rolling window has no
 reset instant, so its whole history is one instance.
 
 A provider's risk is the risk of the window that binds first: worst level, then
-least headroom. `secondary` quotas keep their own risk but never speak for the
-provider. A failed poll leaves the previous risk in place rather than inventing
-a reassuring one.
+least headroom. `secondary` and `backstopped` quotas keep their own risk but
+never speak for the provider — the first measures something else, the second is
+spent but covered by another pool. A failed poll leaves the previous risk in
+place rather than inventing a reassuring one.
+
+## Subscription facts
+
+A plan that ends takes every quota on it, however healthy those look, so the
+plan's own lifetime is part of the risk. Providers that know it report
+`subscription` on their result — `endsAt`, `remainingDays`, `autoRenew`,
+`status` — which is descriptive, passed through, and never stored. Today both
+Alibaba providers do (`endTime` / `instanceEndTime`, `remainingDays`,
+`autoRenewFlag`, `status`).
+
+Levels:
+
+- **crit** — `status` is anything other than `VALID`, or the plan ends within
+  48h and does not renew itself.
+- **warn** — it ends within 7 days and does not renew itself.
+- Auto-renewal **on** clears it: the end date is then bookkeeping. Auto-renewal
+  **unknown** is treated as "will not renew" — the deadline is real either way,
+  and the alternative is silence while a plan runs out.
+
+The provider's risk is the worse of its binding window and its plan. So a
+provider can read `at risk` while every quota on it is healthy; the dashboard's
+plan line and the MCP's plan line say why.
 
 Backtested over this deployment's own 14 days: three windows actually reached
 100% (kimi 5h, kimi weekly, alibaba-token weekly). The rule above warned before
@@ -249,6 +287,12 @@ without re-running it is guesswork.
 ## Cross-cutting rendering
 
 - **MCP percent metrics**: `N% used, M% remaining resets <RFC3339> (in <countdown>)`.
+- **MCP plan line**: both tools print `plan ends <RFC3339> (in <countdown>) ·
+  auto-renewal OFF` for providers that report a subscription, and `status X` when
+  the provider calls it anything but `VALID`.
+- **Expiry vs reset**: a metric carrying `expiresAt` instead of `resetsAt` renders
+  as `expires …` everywhere (MCP line, dashboard card foot, sub-row countdown).
+  It is never counted as a reset — the "next quota reset" tile ignores it.
 - **MCP burn figures**: `query_provider` adds an indented line per metric —
   `risk <ok|elevated|at risk> · burn N%/h · peak 24h M%/h · headroom Xh · Yh at
   peak pace · burn ratio Z.ZZx`. `list_providers` adds the same line for each
@@ -332,6 +376,9 @@ without re-running it is guesswork.
   `ai_usage_headroom_hours` and `ai_usage_risk_level` (0 ok, 1 elevated, 2 at
   risk), with the same labels. Headroom is `+Inf` when nothing is burning, so
   the series never disappears exactly when an alert expression needs it.
+  Per provider (labels `provider`, `name` only), a plan that reports its lifetime
+  also exports `ai_usage_plan_seconds_remaining` and `ai_usage_plan_auto_renew`
+  (1/0) — enough to alert on "ends soon and will not renew".
 - **Retention**: samples older than `retentionDays` (default 90) are deleted
   once a day. `/metrics` and the MCP read only the latest sample, so retention
   affects export only.

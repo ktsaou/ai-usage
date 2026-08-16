@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeMetricRisk, computeProviderRisk, type RiskHistory } from "./risk.js";
+import {
+  computeMetricRisk,
+  computeProviderRisk,
+  computeSubscriptionRisk,
+  type RiskHistory,
+} from "./risk.js";
 import type { ProviderResult, UsageMetric } from "./types.js";
 
 const H = 3600000;
@@ -182,6 +187,68 @@ test("a secondary quota never speaks for the provider, but keeps its own risk", 
   assert.equal(risk.metric, "5h_quota");
   assert.equal(risk.level, "ok");
   assert.equal(risk.metrics.monthly_mcp.level, "crit");
+});
+
+test("a spent window that another pool covers stops speaking for the provider", () => {
+  const history = stubPerMetric({
+    weekly_quota: { percent: 100, short: 0, long: 0, peak: 0 },
+    addon_credits: { percent: 0, short: 0, long: 0, peak: 0 },
+  });
+  const result = providerResult([
+    quota(100, { name: "weekly_quota", window: "weekly", backstopped: true }),
+    quota(0, { name: "addon_credits", window: null, resetsAt: null, expiresAt: NOW + 700 * H }),
+  ]);
+  const risk = computeProviderRisk(history, result, NOW)!;
+  assert.equal(risk.metric, "addon_credits");
+  assert.equal(risk.level, "ok");
+  // ...while still reporting the truth about the window itself
+  assert.equal(risk.metrics.weekly_quota.level, "crit");
+});
+
+test("without the backstop the same spent window is the provider's problem", () => {
+  const history = stubPerMetric({ weekly_quota: { percent: 100, short: 0, long: 0, peak: 0 } });
+  const result = providerResult([quota(100, { name: "weekly_quota", window: "weekly" })]);
+  assert.equal(computeProviderRisk(history, result, NOW)!.level, "crit");
+});
+
+test("a plan ending soon without auto-renewal outranks healthy quotas", () => {
+  const history = stubPerMetric({ weekly_quota: { percent: 10, short: 0, long: 0, peak: 0 } });
+  const result: ProviderResult = {
+    ...providerResult([quota(10, { name: "weekly_quota", window: "weekly" })]),
+    subscription: { endsAt: NOW + 30 * H, remainingDays: 1, autoRenew: false, status: "VALID" },
+  };
+  const risk = computeProviderRisk(history, result, NOW)!;
+  assert.equal(risk.level, "crit");
+  assert.equal(risk.binding!.level, "ok"); // the quota itself is fine
+  assert.equal(risk.subscription!.level, "crit");
+});
+
+test("plan expiry levels follow the deadline, and auto-renewal clears them", () => {
+  const at = (h: number, autoRenew: boolean | null) =>
+    computeSubscriptionRisk({ endsAt: NOW + h * H, remainingDays: null, autoRenew, status: "VALID" }, NOW)!
+      .level;
+  assert.equal(at(30, false), "crit"); // inside 48h
+  assert.equal(at(72, false), "warn"); // inside a week
+  assert.equal(at(300, false), "ok");
+  assert.equal(at(30, true), "ok"); // it renews itself; the date is bookkeeping
+  // Unknown renewal is treated as "will not renew": the end date is real, and
+  // the alternative is saying nothing while a plan runs out.
+  assert.equal(at(30, null), "crit");
+});
+
+test("a plan the provider itself calls invalid is critical whatever the dates say", () => {
+  const r = computeSubscriptionRisk(
+    { endsAt: NOW + 900 * H, remainingDays: 37, autoRenew: true, status: "EXPIRED" },
+    NOW
+  )!;
+  assert.equal(r.level, "crit");
+});
+
+test("no subscription information yields none, not a reassuring default", () => {
+  assert.equal(computeSubscriptionRisk(null, NOW), null);
+  const history = stubPerMetric({ weekly_quota: { percent: 10, short: 0, long: 0, peak: 0 } });
+  const risk = computeProviderRisk(history, providerResult([quota(10, { name: "weekly_quota" })]), NOW)!;
+  assert.equal(risk.subscription, null);
 });
 
 test("a failed poll produces no risk at all, rather than a reassuring one", () => {

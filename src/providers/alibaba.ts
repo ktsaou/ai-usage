@@ -1,5 +1,5 @@
 import type { Page } from "patchright";
-import type { ProviderConfig, ProviderResult, UsageMetric } from "../types.js";
+import type { ProviderConfig, ProviderResult, SubscriptionInfo, UsageMetric } from "../types.js";
 import { result, metric } from "./common.js";
 import { getPage } from "./browser.js";
 
@@ -126,6 +126,18 @@ async function callGateway(
   return gatewayFetch(page, api, data);
 }
 
+/** `endTime`/`remainingDays`/`autoRenewFlag`/`status` are named the same on both plans. */
+function subscriptionOf(src: any, endKey: string): SubscriptionInfo | null {
+  if (!src) return null;
+  const endsAt = Number(src[endKey]);
+  return {
+    endsAt: Number.isFinite(endsAt) && endsAt > 0 ? endsAt : null,
+    remainingDays: Number.isFinite(Number(src.remainingDays)) ? Number(src.remainingDays) : null,
+    autoRenew: typeof src.autoRenewFlag === "boolean" ? src.autoRenewFlag : null,
+    status: src.status ?? null,
+  };
+}
+
 export async function fetchAlibabaCoding(config: ProviderConfig): Promise<ProviderResult> {
   try {
     const res = await callGateway(
@@ -179,7 +191,13 @@ export async function fetchAlibabaCoding(config: ProviderConfig): Promise<Provid
       );
     }
 
-    return result(config, metrics, info.instanceName || info.instanceType || null);
+    return result(
+      config,
+      metrics,
+      info.instanceName || info.instanceType || null,
+      null,
+      subscriptionOf(info, "instanceEndTime")
+    );
   } catch (err: any) {
     return result(config, [], null, err.message || "browser fetch failed");
   }
@@ -192,6 +210,20 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
     if (!usage.ok) return result(config, [], null, usage.errorMsg || "gateway error");
     if (!usage.data) return result(config, [], null, "no token plan usage data");
 
+    // Extra usage packs bought on top of the plan. The console spends the plan
+    // quota first and then these, and says so ("you can continue using the
+    // service after reaching the quota"), so a spent plan window with credits
+    // left here does not stop work.
+    const addon = await callGateway(
+      config.id,
+      "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/addon/summary",
+      {}
+    );
+    const addonTotal = Number(addon.data?.totalCredits);
+    const addonLeft = Number(addon.data?.remainingCredits);
+    const hasAddon = addon.ok && Number.isFinite(addonTotal) && addonTotal > 0;
+    const addonCovers = hasAddon && Number.isFinite(addonLeft) && addonLeft > 0;
+
     const metrics: UsageMetric[] = [];
     // Percentages arrive as 0..1 fractions.
     const windows: Array<[string, string, string, string]> = [
@@ -201,14 +233,40 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
     for (const [name, window, pctKey, resetKey] of windows) {
       const fraction = Number(usage.data[pctKey]);
       if (!Number.isFinite(fraction)) continue;
-      metrics.push(metric(name, fraction * 100, 100, "%", window, usage.data[resetKey] ?? null));
+      const percent = fraction * 100;
+      metrics.push(
+        metric(name, percent, 100, "%", window, usage.data[resetKey] ?? null, {
+          // Only once it is actually spent: a window still being consumed is the
+          // real constraint, whether or not packs are held in reserve.
+          ...(percent >= 100 && addonCovers
+            ? { backstopped: true, note: "plan quota spent — usage now comes from the extra packs" }
+            : {}),
+        })
+      );
+    }
+
+    if (hasAddon) {
+      const packs = Number(addon.data?.activeCount);
+      const expiresAt = Number(addon.data?.nearestExpireTime);
+      metrics.push(
+        metric("addon_credits", addonTotal - addonLeft, addonTotal, "credits", null, null, {
+          note: `extra usage packs${Number.isFinite(packs) ? ` (${packs} active)` : ""} — spent after the plan quota, and they expire rather than reset`,
+          expiresAt: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : null,
+        })
+      );
     }
 
     const sub = await callGateway(config.id, "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/subscription", {
       queryInstanceInfoRequest: { commodityCode: "sfm_tokenplansolo_public_intl" },
     });
 
-    return result(config, metrics, sub.ok ? sub.data?.specCode ?? null : null);
+    return result(
+      config,
+      metrics,
+      sub.ok ? sub.data?.specCode ?? null : null,
+      null,
+      sub.ok ? subscriptionOf(sub.data, "endTime") : null
+    );
   } catch (err: any) {
     return result(config, [], null, err.message || "browser fetch failed");
   }

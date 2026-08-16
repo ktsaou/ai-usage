@@ -49,6 +49,7 @@ export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
             fetchedAt: last.fetchedAt,
             error: last.error,
             plan: last.plan,
+            subscription: last.subscription ?? null,
             metrics: withRisk(last.metrics, risk),
           }
         : null,
@@ -61,15 +62,16 @@ export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
 const SPARK_POINTS = 40;
 
 /**
- * The most exhausted window, ignoring quotas that measure something else — the
- * same rule the dashboard uses to pick a card's headline metric. Duplicated
- * there because the dashboard is a single static file with no build step and
- * cannot import from here; keep the two in step.
+ * The most exhausted window, ignoring quotas that measure something else and
+ * ones that are spent but covered by another pool — the same rule the dashboard
+ * uses to pick a card's headline metric. Duplicated there because the dashboard
+ * is a single static file with no build step and cannot import from here; keep
+ * the two in step.
  */
 function primaryMetric(metrics: UsageMetric[]): UsageMetric | null {
   if (!metrics?.length) return null;
   // Fall back to the full list rather than leave a card with no headline.
-  const eligible = metrics.filter((m) => !m.secondary);
+  const eligible = metrics.filter((m) => !m.secondary && !m.backstopped);
   const candidates = eligible.length ? eligible : metrics;
   const pct = candidates.filter((m) => m.percent !== null);
   if (pct.length) return pct.reduce((a, b) => ((b.percent as number) > (a.percent as number) ? b : a));

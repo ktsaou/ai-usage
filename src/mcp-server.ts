@@ -12,6 +12,24 @@ function toRfc3339(ms: number | null | undefined): string | null {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+/**
+ * The plan's own deadline. Worth a line of its own: a plan that ends without
+ * renewing takes every quota on it, however healthy those look.
+ */
+function planLine(risk: any): string | null {
+  const s = risk?.subscription;
+  if (!s || (!s.endsAt && !s.status)) return null;
+  const parts: string[] = [];
+  if (s.endsAt) {
+    const cd = countdown(s.endsAt - Date.now());
+    parts.push(`plan ends ${toRfc3339(s.endsAt)} (in ${cd})`);
+  }
+  if (s.autoRenew === true) parts.push("auto-renews");
+  else if (s.autoRenew === false) parts.push("auto-renewal OFF");
+  if (s.status && s.status !== "VALID") parts.push(`status ${s.status}`);
+  return parts.join(" · ");
+}
+
 /** Hours as something readable: `40m`, `3.1h`, `2.4d`. */
 function hours(h: number | null | undefined): string | null {
   if (h === null || h === undefined || !Number.isFinite(h)) return null;
@@ -31,16 +49,17 @@ function deadline(risk: any): string {
   return h ? ` (resets in ${h})` : "";
 }
 
+/** A rate that rounds to zero is not zero, and saying "0.0%/h" claims it is. */
+function rate(r: number): string {
+  return r > 0 && r < 0.05 ? "<0.1%/h" : `${r.toFixed(1)}%/h`;
+}
+
 /**
  * The burn figures, in the order a caller needs them: how fast it is going, how
  * long that leaves, and whether that beats the reset. Stated as measurements,
  * never as advice — what a caller should do with a quota depends on what they
  * are about to run, which this server cannot know.
  */
-function rate(r: number): string {
-  return r > 0 && r < 0.05 ? "<0.1%/h" : `${r.toFixed(1)}%/h`;
-}
-
 function burnSummary(risk: any): string | null {
   if (!risk) return null;
   const label: Record<string, string> = { ok: "ok", warn: "elevated", crit: "at risk" };
@@ -104,7 +123,8 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         // of its windows runs out first, so that is the one worth listing.
         const burn = lf && !lf.error ? burnSummary(p.risk?.binding) : null;
         const detail = burn ? `\n    ${p.risk.metric}${deadline(p.risk.binding)}: ${burn}` : "";
-        return `- ${p.id} (${p.name}): ${state}${detail}`;
+        const plan = lf && !lf.error ? planLine(p.risk) : null;
+        return `- ${p.id} (${p.name}): ${state}${detail}${plan ? `\n    ${plan}` : ""}`;
       });
       const legend =
         "burn ratio = current pace / the pace this quota can afford until it resets; above 1 means it runs out before the reset. headroom = hours until exhausted at the current pace.";
@@ -137,7 +157,14 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
       const lines = (data.metrics || []).map((m: any) => {
         const rfc = toRfc3339(m.resetsAt);
         const cd = typeof m.resetsAt === "number" ? countdown(m.resetsAt - Date.now()) : null;
-        const reset = rfc ? ` resets ${rfc}${cd ? ` (in ${cd})` : ""}` : "";
+        // Some allowances expire instead of resetting — nothing comes back after.
+        const exp = toRfc3339(m.expiresAt);
+        const expCd = typeof m.expiresAt === "number" ? countdown(m.expiresAt - Date.now()) : null;
+        const reset = rfc
+          ? ` resets ${rfc}${cd ? ` (in ${cd})` : ""}`
+          : exp
+            ? ` expires ${exp}${expCd ? ` (in ${expCd})` : ""}`
+            : "";
 
         // Callers otherwise guess what a quota measures from its name alone.
         const extra: string[] = [];
@@ -153,21 +180,27 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         const suffix = extra.length > 0 ? `\n${extra.join("\n")}` : "";
 
         if (m.unit === "%") {
-          return `  ${m.name} [${m.window || "n/a"}]: ${m.used}% used, ${m.remaining}% remaining${reset}${suffix}`;
+          return `  ${m.name}${m.window ? ` [${m.window}]` : ""}: ${m.used}% used, ${m.remaining}% remaining${reset}${suffix}`;
         }
         const unit = m.unit ? ` ${m.unit}` : "";
         if (m.used === null && m.remaining === null && m.total !== null) {
-          return `  ${m.name} [${m.window || "n/a"}]: ${m.total.toLocaleString()}${unit} available${reset}${suffix}`;
+          return `  ${m.name}${m.window ? ` [${m.window}]` : ""}: ${m.total.toLocaleString()}${unit} available${reset}${suffix}`;
         }
         const pct = m.percent !== null ? ` (${m.percent.toFixed(1)}%)` : "";
         const used = m.used !== null ? m.used.toLocaleString() : "?";
         const total = m.total !== null ? m.total.toLocaleString() : "?";
         const remaining = m.remaining !== null ? m.remaining.toLocaleString() : "?";
-        return `  ${m.name} [${m.window || "n/a"}]: ${used}/${total} used, ${remaining} remaining${unit}${pct}${reset}${suffix}`;
+        return `  ${m.name}${m.window ? ` [${m.window}]` : ""}: ${used}/${total} used, ${remaining} remaining${unit}${pct}${reset}${suffix}`;
       });
       const head = `${data.name} (${data.providerType})${data.plan ? " — plan " + data.plan : ""}`;
+      const plan = planLine(data.risk);
       return {
-        content: [{ type: "text", text: `# ${name} — remaining usage\n${head}\n${lines.join("\n") || "  (no metrics)"}` }],
+        content: [
+          {
+            type: "text",
+            text: `# ${name} — remaining usage\n${head}${plan ? `\n  ${plan}` : ""}\n${lines.join("\n") || "  (no metrics)"}`,
+          },
+        ],
       };
     }
   );
