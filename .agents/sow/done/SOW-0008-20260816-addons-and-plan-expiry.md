@@ -4,7 +4,8 @@
 
 Status: completed
 
-Sub-state: implemented, tested, deployed to the daemon host and verified live.
+Sub-state: delivered, deployed and verified live; the auto-renewal regression was
+repaired and closed in the same SOW (see `## Regression - 2026-08-16`).
 
 ## Requirements
 
@@ -360,6 +361,9 @@ Lessons:
 
 Follow-up mapping:
 
+- Auto-renewal signal: **rejected by the user** after the regression (option 2 of
+  three). Renewal stays unreported; see the regression section for the evidence
+  and the consequence.
 - Reset cards (`reset-card/list`): rejected for now with evidence — the endpoint
   returns an empty list, and parsing an unseen shape is guesswork. Recorded in
   the spec so the next reader knows it exists.
@@ -372,7 +376,8 @@ Follow-up mapping:
 
 Delivered and live. The token plan card now says what is actually true: the plan
 quota is spent, 40000 add-on credits remain, and the plan itself ends in three
-days without renewing. The exhausted window keeps reporting itself exhausted but
+days. (The original wording here said "without renewing" — that claim was the
+regression below, and it is gone.) The exhausted window keeps reporting itself exhausted but
 no longer decides the provider's state, so the monitor stops claiming "blocked"
 while work continues. Both Alibaba plans report their lifetime, and a plan ending
 soon without auto-renewal now raises the provider's risk on its own.
@@ -388,4 +393,102 @@ See Validation → Lessons.
 
 ## Regression Log
 
-None yet.
+See `## Regression - 2026-08-16` below.
+
+## Regression - 2026-08-16
+
+What broke:
+
+The card and the MCP reported "auto-renewal off" for the token plan and raised
+the provider to `warn` on that basis. The user's admin console shows auto-renewal
+**on**. The claim was false, and it was the kind of false that makes someone act
+— it says a plan is about to lapse.
+
+Evidence (captured live, all three at the same moment):
+
+- gateway `…/v2/subscription` → `autoRenewFlag: false` ← the field this SOW used
+- billing action `QueryAvailableInstances` → `RenewStatus: AutoRenewal`,
+  `RenewalDuration: 1M` ← the source the console itself reads
+- the console page → "Auto-Renewal Enabled"
+- the user's independent check of the admin console agrees with the last two.
+
+So `autoRenewFlag` in the bailian subscription record is not the billing
+system's renewal state. It happened to agree for the coding plan (`true`, and
+the console agrees), which is exactly why it looked trustworthy.
+
+Why previous validation missed it:
+
+Every check confirmed the field was *transported* correctly — the API returned
+`false`, the payload carried `false`, the card said "off". Nothing compared the
+value against the vendor's own display, which is the only place its meaning is
+defined. The SOW's own gate says to check what the console shows; that was done
+for the add-on pool, whose numbers were read off the page, and not for the
+renewal flag, whose value looked self-explanatory.
+
+Can the authoritative source be read?
+
+No, not by the daemon as it stands. The console's `QueryAvailableInstances` call
+is a `product=BssOpenApi` action on the console host carrying two things the
+daemon cannot produce:
+
+- a `sec_token` that is **not** in `document.cookie` (checked: no cookie whose
+  name matches `token`/`sec` exists on that origin), not on
+  `window.ALIYUN_CONSOLE_CONFIG`, `window.SEC_TOKEN` or `window.secToken`, and
+  not in a `meta[name=sec_token]` or `meta[name=csrf-token]` tag;
+- a `collina` anti-bot fingerprint minted by the vendor's own scripts.
+
+Direct calls without them return `PostonlyOrTokenError: Please reload the page.`
+This also explains a detail worth recording: the daemon's own gateway calls send
+an **empty** `sec_token` and work, so the bailian gateway does not require it
+while the console host does.
+
+Repair:
+
+- `autoRenewFlag` is no longer read. `autoRenew` stays `null`, so no surface
+  claims a renewal state in either direction.
+- An unknown renewal no longer escalates risk. It previously counted as "will
+  not renew" — a rule introduced in this same SOW on the reasoning that an end
+  date is real either way, and the exact rule that turned a wrong field into a
+  confident warning.
+- The end date, remaining days and status are unaffected and still shown.
+
+Validation:
+
+- `npm test` — 26 tests pass, including the inverted expectation for unknown
+  renewal, which now asserts `ok` and carries the reason.
+- `npx tsc --noEmit` — clean.
+- Live after deploy: the token plan card shows the end date with no renewal
+  claim and the provider is no longer amber for this reason;
+  `ai_usage_plan_auto_renew` is absent rather than reporting 0.
+- Same-failure scan: `autoRenew` has four consumers (dashboard, MCP, Prometheus,
+  risk) and every one already treated `null` as "say nothing", so removing the
+  value degrades cleanly everywhere.
+
+Artifact updates:
+
+- Spec: the renewal paragraph now records the contradiction, the unreachable
+  source with what was checked, and the consequence that this risk currently
+  fires only on an invalid status.
+- AGENTS.md: a vendor's APIs can contradict each other and the reachable one may
+  be the wrong one; check a user-actionable fact against their console, and
+  where the authoritative source is unreachable report nothing rather than the
+  reachable guess.
+
+Decision on restoring a renewal signal — **rejected, by the user**:
+
+Three options were put to the user: (1) capture `RenewStatus` from the response
+to the console's own billing call during the tab's existing 6-hourly revisit,
+which needs the token provider's tab parked on the token-plan route plus a
+listener and cache in the browser layer; (2) leave renewal unreported; (3) scrape
+the rendered "Auto-Renewal Enabled/Disabled" text. The assistant recommended (1).
+The user chose **(2)**.
+
+So renewal state stays unknown and no surface reports it. The consequence is
+recorded in the spec: the plan-expiry risk can only fire on an invalid status,
+and the end date is shown without any claim about what happens at it. This is a
+closed decision, not deferred work — do not reopen it without new evidence, such
+as the vendor exposing renewal through the gateway the daemon can already reach.
+
+Live state at close (both plans): the card's plan line reads only `ends in …`,
+`ai_usage_plan_auto_renew` emits no series, and `alibaba-token` is back to `ok`
+after having been wrongly amber.
