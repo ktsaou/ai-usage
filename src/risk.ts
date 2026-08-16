@@ -204,9 +204,13 @@ export function computeSubscriptionRisk(
   const hoursLeft = sub.endsAt ? (sub.endsAt - now) / H : null;
   let level: RiskLevel = "ok";
   if (sub.status && sub.status !== "VALID") level = "crit";
-  // Anything but a confirmed "it renews" is treated as "it does not": the end
-  // date is real either way, and the alternative is silence while a plan runs out.
-  else if (sub.autoRenew !== true && hoursLeft !== null) {
+  // Only a confirmed "it will not renew" raises this. Unknown renewal used to
+  // count as "will not renew", on the reasoning that an end date is real either
+  // way — until a provider was found reporting a renewal flag that contradicted
+  // its own billing system, and the monitor announced that a renewing plan was
+  // about to lapse. A warning nobody can act on is worse than no warning, so an
+  // unknown renewal now says nothing.
+  else if (sub.autoRenew === false && hoursLeft !== null) {
     if (hoursLeft <= PLAN_EXPIRY_CRIT_H) level = "crit";
     else if (hoursLeft <= PLAN_EXPIRY_WARN_H) level = "warn";
   }

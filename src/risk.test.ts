@@ -231,9 +231,10 @@ test("plan expiry levels follow the deadline, and auto-renewal clears them", () 
   assert.equal(at(72, false), "warn"); // inside a week
   assert.equal(at(300, false), "ok");
   assert.equal(at(30, true), "ok"); // it renews itself; the date is bookkeeping
-  // Unknown renewal is treated as "will not renew": the end date is real, and
-  // the alternative is saying nothing while a plan runs out.
-  assert.equal(at(30, null), "crit");
+  // Unknown renewal says nothing. A vendor was found reporting a renewal flag
+  // that contradicted its own billing system, and treating unknown as "will not
+  // renew" announced that a renewing plan was about to lapse.
+  assert.equal(at(30, null), "ok");
 });
 
 test("a plan the provider itself calls invalid is critical whatever the dates say", () => {

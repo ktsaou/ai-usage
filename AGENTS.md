@@ -55,6 +55,8 @@ Per-provider field semantics (metric names, units, windows, reset-time source, u
 
 A metric may carry `note`, `breakdown`, `secondary`, `rolling`, `backstopped` and `expiresAt`, and a result may carry `subscription` — descriptive fields set by the provider module, passed through the API, and never stored. `secondary` means "this measures something other than the plan's usage"; `backstopped` means "this window is spent but another pool covers it, so it is not the constraint". Neither may headline a card or drive the provider's risk. Only the fetcher knows either, so renderers must never special-case a metric name to decide it. Card headline selection lives in `primaryMetric()` in both `src/server.ts` and `src/dashboard.html` (the dashboard has no build step and cannot import) — change both together.
 
+A vendor's APIs can contradict each other, and the one you can reach may be the wrong one. Alibaba's `autoRenewFlag` disagreed with its own billing system about whether a plan renews, and the monitor confidently told the user a renewing plan was about to lapse. Before reporting a fact that a user will act on, check it against what their console displays; where they disagree and the authoritative source is unreachable, report nothing rather than the reachable guess.
+
 Before adding a field, check what the vendor's console actually shows. One provider's quota reads 100% while the work continues from packs bought separately, reported by an endpoint the fetcher never called; the monitor said "blocked" for as long as nobody looked. When a card contradicts the vendor's own page, the missing data is usually one API call away — capture the console's traffic rather than guessing (see SOW-0008 for the method).
 
 ## Exhaustion Risk

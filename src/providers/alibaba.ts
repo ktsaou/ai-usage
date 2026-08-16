@@ -126,14 +126,26 @@ async function callGateway(
   return gatewayFetch(page, api, data);
 }
 
-/** `endTime`/`remainingDays`/`autoRenewFlag`/`status` are named the same on both plans. */
+/**
+ * `endTime`/`remainingDays`/`status` are named the same on both plans.
+ *
+ * `autoRenewFlag` is deliberately **not** read. It is not the billing system's
+ * renewal state and can contradict it: measured on the token plan, this field
+ * said `false` at the same moment the billing API reported
+ * `RenewStatus: AutoRenewal` and the console displayed "Auto-Renewal Enabled".
+ * Reporting renewal from it told the user their plan was about to lapse when it
+ * was not. The console reads renewal from a billing action the daemon cannot
+ * call — it needs a CSRF token that is nowhere in the page and an anti-bot
+ * fingerprint minted by the vendor's own scripts — so renewal is left unknown
+ * rather than guessed. Do not restore this field without new evidence.
+ */
 function subscriptionOf(src: any, endKey: string): SubscriptionInfo | null {
   if (!src) return null;
   const endsAt = Number(src[endKey]);
   return {
     endsAt: Number.isFinite(endsAt) && endsAt > 0 ? endsAt : null,
     remainingDays: Number.isFinite(Number(src.remainingDays)) ? Number(src.remainingDays) : null,
-    autoRenew: typeof src.autoRenewFlag === "boolean" ? src.autoRenewFlag : null,
+    autoRenew: null,
     status: src.status ?? null,
   };
 }

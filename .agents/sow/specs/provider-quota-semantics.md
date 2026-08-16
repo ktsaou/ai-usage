@@ -256,17 +256,32 @@ A plan that ends takes every quota on it, however healthy those look, so the
 plan's own lifetime is part of the risk. Providers that know it report
 `subscription` on their result — `endsAt`, `remainingDays`, `autoRenew`,
 `status` — which is descriptive, passed through, and never stored. Today both
-Alibaba providers do (`endTime` / `instanceEndTime`, `remainingDays`,
-`autoRenewFlag`, `status`).
+Alibaba providers report `endTime` / `instanceEndTime`, `remainingDays` and
+`status`.
+
+**Renewal state is currently unknown for every provider, on purpose.** Alibaba's
+`autoRenewFlag` is not the billing system's renewal state and contradicts it:
+measured on the token plan, the field read `false` while the billing action the
+console itself uses reported `RenewStatus: AutoRenewal`, a monthly renewal
+duration, and the console page displayed "Auto-Renewal Enabled". The billing
+action cannot be called by the daemon — it needs a `sec_token` that is not in
+`document.cookie`, not on `window.ALIYUN_CONSOLE_CONFIG`, and not in any meta
+tag, plus a `collina` anti-bot fingerprint minted by the vendor's scripts. So
+`autoRenewFlag` is not read at all and `autoRenew` stays `null`. Do not restore
+it without new evidence.
 
 Levels:
 
 - **crit** — `status` is anything other than `VALID`, or the plan ends within
-  48h and does not renew itself.
-- **warn** — it ends within 7 days and does not renew itself.
-- Auto-renewal **on** clears it: the end date is then bookkeeping. Auto-renewal
-  **unknown** is treated as "will not renew" — the deadline is real either way,
-  and the alternative is silence while a plan runs out.
+  48h and is **known** not to renew.
+- **warn** — it ends within 7 days and is **known** not to renew.
+- Auto-renewal **on** clears it: the end date is then bookkeeping.
+- Auto-renewal **unknown** says nothing. It used to count as "will not renew",
+  on the reasoning that the end date is real either way; that produced a
+  confident warning that a renewing plan was about to lapse. A warning nobody
+  can act on is worse than no warning.
+- Consequence, stated plainly: while no provider can report renewal, this risk
+  only ever fires on an invalid status. The end date is still shown everywhere.
 
 The provider's risk is the worse of its binding window and its plan. So a
 provider can read `at risk` while every quota on it is healthy; the dashboard's
