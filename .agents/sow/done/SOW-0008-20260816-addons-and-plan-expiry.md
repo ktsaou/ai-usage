@@ -2,9 +2,9 @@
 
 ## Status
 
-Status: in-progress
+Status: completed
 
-Sub-state: design approved by the user; implementing.
+Sub-state: implemented, tested, deployed to the daemon host and verified live.
 
 ## Requirements
 
@@ -237,21 +237,154 @@ Open decisions:
   attempt), each restoring the original file and restarting the service. Final
   state verified identical to the repository.
 
+- Implemented in the planned order. One design point was settled by a failing
+  test rather than by choice: unknown auto-renewal. Treating "unknown" as safe
+  would silence a real end date, so anything but a confirmed "it renews" is
+  treated as "it does not". The test was wrong, not the code; both now say so.
+
 ## Validation
 
-Pending.
+Acceptance criteria evidence (live, after deploy):
+
+- The add-on pool is fetched and reported: `alibaba-token` went from 1 metric per
+  poll to 2, confirming `addon/summary` accepts the `{}` payload that was
+  inferred from its sibling endpoint. Live values: 0 of 40000 credits used,
+  2 active packs, expiry 2026-09-16 16:00 UTC.
+- The spent window no longer speaks for the provider: `weekly_quota` reports
+  100% and its own `crit`, is flagged `BACKSTOPPED`, and the provider's binding
+  metric is `addon_credits`. The card headlines the add-on pool; the weekly
+  window renders as a sub-row at 100%.
+- Plan facts are live for both providers: the token plan ends 2026-08-19 16:00
+  UTC (76h, auto-renew false → `warn`), the coding plan 2026-09-14 16:00 UTC
+  (700h, auto-renew true → `ok`). The provider-level risk of `alibaba-token` is
+  `warn` from the plan while its binding quota is `ok` — the case the design
+  intends — and both the dashboard plan line and the MCP plan line state why.
+- Prometheus carries `ai_usage_plan_seconds_remaining` and
+  `ai_usage_plan_auto_renew` for both providers (274698s / 0 and 2521098s / 1).
+- Expiry renders as expiry, never as a reset: the MCP prints
+  `expires 2026-09-16T16:00:00Z (in 31d …)`, the card foot reads `expires in …`,
+  and the "next quota reset" tile ignores it.
+- The add-on metric's burn rate appeared 11 minutes after its first sample — the
+  10-minute minimum span plus a poll — reporting no rate rather than a
+  fabricated one until then.
+- No schema change: the new fields are descriptive and unstored; `addon_credits`
+  is an ordinary metric row.
+
+Tests or equivalent validation:
+
+- `npm test` — 26 tests, all passing. New coverage: a backstopped window is
+  excluded from binding while keeping its own critical state; the same window
+  without the flag still binds; a plan ending soon outranks healthy quotas;
+  plan-expiry levels at 30h/72h/300h with auto-renewal on, off and unknown; a
+  non-`VALID` status overriding the dates; and absent subscription data yielding
+  none rather than a reassuring default.
+- `npx tsc --noEmit` — clean.
+
+Real-use evidence:
+
+- Before deploying, the whole surface was exercised against synthetic data
+  shaped like the live account (spent weekly window, untouched packs, plan
+  ending in 76h): API payload, `/metrics`, a real MCP session and the dashboard
+  in a headless browser.
+- After deploying: the live checks listed above, plus a live MCP
+  `query_provider` and a screenshot of the running dashboard.
+
+Reviewer findings:
+
+- None; no external review was requested.
+
+Same-failure scan:
+
+- Checked every other fetcher for discarded subscription-level fields: z.ai,
+  MiniMax, Kimi, MiMo, DeepSeek and OpenRouter responses carry no plan end date,
+  renewal flag or add-on pool, so there is nothing equivalent to surface. Only
+  the two Alibaba providers report a subscription.
+- Checked every consumer of `resetsAt` for one that would misread `expiresAt`:
+  all of them null-guard, and the additions are explicit about which is which.
+
+Sensitive data gate:
+
+- The captured console traffic contains account, organisation, workspace and
+  instance identifiers and a masked API key. None of it appears in code, spec,
+  AGENTS.md or this SOW: only field names, semantics, the two quota values and
+  the dates. Raw captures stayed in the session scratchpad.
+
+Artifact maintenance gate:
+
+- AGENTS.md: updated — `backstopped`/`expiresAt`/`subscription` added to the
+  descriptive-fields paragraph, plus the rule that a card contradicting the
+  vendor's own console usually means an uncalled endpoint.
+- Runtime project skills: none exist; the reusable part of this work (how to
+  capture a console's traffic through the daemon) is recorded in AGENTS.md and
+  in this SOW's execution log, which is where a future reader will look.
+- Specs: updated — add-on endpoint and metric, the backstop rule and why it
+  exists, the disappearance of the token plan's 5h window, subscription facts
+  and their levels, expiry-versus-reset rendering, the MCP plan line and the new
+  Prometheus series.
+- End-user/operator docs: none exist in this repository.
+- End-user/operator skills: none exist in this repository.
+- SOW lifecycle: `Status: completed`, moved to `.agents/sow/done/`, committed
+  with the implementation.
+
+Specs update:
+
+- `.agents/sow/specs/provider-quota-semantics.md` — as above.
+
+Project skills update:
+
+- Not needed; see artifact maintenance gate.
+
+End-user/operator docs update:
+
+- None affected.
+
+End-user/operator skills update:
+
+- None affected.
+
+Lessons:
+
+- The monitor was wrong for as long as nobody compared it with the vendor's own
+  page. Both facts it was missing were one API call away, and one of them was in
+  a response it already fetched and parsed. When a card contradicts the console,
+  the data is usually already there.
+- Instrumenting the running daemon was the only way to see this: the browser
+  session cannot be shared with a second process, and every guess at the
+  console's request shape was rejected by its anti-bot check. Letting the page
+  make its own calls and reading the responses worked first time.
+- An endpoint's name is not its contract: `GetTokenPlanAccountDetail` returns
+  account identity, not token plan details. Reading the response beat reasoning
+  about the name.
+- A test that fails can be the design decision surfacing. Unknown auto-renewal
+  had never been considered until the assertion disagreed with the code.
+
+Follow-up mapping:
+
+- Reset cards (`reset-card/list`): rejected for now with evidence — the endpoint
+  returns an empty list, and parsing an unseen shape is guesswork. Recorded in
+  the spec so the next reader knows it exists.
+- Whether add-on credits survive the plan expiring: unknown, and no API response
+  says. Not tracked as work; flagged to the user, whose account it is.
+- OpenRouter's unshown 87%-of-credits figure remains open from SOW-0007 and is
+  unaffected by this change.
 
 ## Outcome
 
-Pending.
+Delivered and live. The token plan card now says what is actually true: the plan
+quota is spent, 40000 add-on credits remain, and the plan itself ends in three
+days without renewing. The exhausted window keeps reporting itself exhausted but
+no longer decides the provider's state, so the monitor stops claiming "blocked"
+while work continues. Both Alibaba plans report their lifetime, and a plan ending
+soon without auto-renewal now raises the provider's risk on its own.
 
 ## Lessons Extracted
 
-Pending.
+See Validation → Lessons.
 
 ## Followup
 
-None yet.
+- Add-on credits' fate after plan expiry is undocumented by the vendor's API; the
+  user was told, since only they can check it against the account.
 
 ## Regression Log
 
