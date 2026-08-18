@@ -328,7 +328,11 @@ without re-running it is guesswork.
   one legend line defining burn ratio and headroom. A rate that rounds to zero
   prints `<0.1%/h`; a rate of exactly zero prints `idle` and no headroom. The
   peak-pace headroom is printed only when a resumed burst would actually beat the
-  deadline, otherwise it is a large number about nothing. Neither tool ranks
+  deadline, otherwise it is a large number about nothing. A bridging pool states
+  the deadline its ratio is measured against in **both** tools — without it the
+  only date on that line is the pack expiry, which is not what the ratio means.
+  When the plan's risk outranks every quota on the provider, the plan line says
+  so explicitly, since no quota line can. Neither tool ranks
   providers or recommends one: which subscription to use depends on what the
   caller is about to run, so the tools report status only.
 - **Metric self-description**: a metric may carry `note` (what the quota

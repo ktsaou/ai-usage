@@ -7,6 +7,9 @@ export interface McpBackend {
   queryProvider(id: string): Promise<any>;
 }
 
+const RANK: Record<string, number> = { ok: 0, warn: 1, crit: 2 };
+const LABEL: Record<string, string> = { ok: "ok", warn: "elevated", crit: "at risk" };
+
 function toRfc3339(ms: number | null | undefined): string | null {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return null;
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -27,6 +30,11 @@ function planLine(risk: any): string | null {
   if (s.autoRenew === true) parts.push("auto-renews");
   else if (s.autoRenew === false) parts.push("auto-renewal OFF");
   if (s.status && s.status !== "VALID") parts.push(`status ${s.status}`);
+  // The provider's level is the worse of its binding window and its plan. When
+  // the plan is the worse one, no quota line shows it, so say it here.
+  if (risk.binding && RANK[s.level] > RANK[risk.binding.level]) {
+    parts.push(`this puts the provider at ${LABEL[s.level] || s.level}`);
+  }
   return parts.join(" · ");
 }
 
@@ -63,8 +71,7 @@ function rate(r: number): string {
  */
 function burnSummary(risk: any): string | null {
   if (!risk) return null;
-  const label: Record<string, string> = { ok: "ok", warn: "elevated", crit: "at risk" };
-  const parts: string[] = [`risk ${label[risk.level] || risk.level}`];
+  const parts: string[] = [`risk ${LABEL[risk.level] || risk.level}`];
 
   const now = risk.ratePerHour;
   const peak = risk.peakRatePerHour;
@@ -133,7 +140,7 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         return `- ${p.id} (${p.name}): ${state}${detail}${plan ? `\n    ${plan}` : ""}`;
       });
       const legend =
-        "burn ratio = current pace / the pace this quota can afford until it resets; above 1 means it runs out before the reset. headroom = hours until exhausted at the current pace.";
+        "burn ratio = current pace / the pace this quota can afford until its deadline (its reset, or for a pool covering a spent window, that window's reset); above 1 means it runs out first. headroom = time until exhausted at the current pace.";
       return {
         content: [
           { type: "text", text: `# ${name} — monitored providers\n${lines.join("\n")}\n\n${legend}` },
@@ -175,7 +182,10 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         // Callers otherwise guess what a quota measures from its name alone.
         const extra: string[] = [];
         const burn = burnSummary(m.risk);
-        if (burn) extra.push(`      ${burn}`);
+        // A bridging pool's ratio is measured against the covered window's reset,
+        // which appears nowhere else on this line — the only date here is the
+        // pack expiry, so without this the ratio reads against the wrong horizon.
+        if (burn) extra.push(`      ${burn}${m.risk?.bridging ? deadline(m.risk) : ""}`);
         if (m.note) extra.push(`      what this measures: ${m.note}`);
         if (m.breakdown && Object.keys(m.breakdown).length > 0) {
           const parts = Object.entries(m.breakdown)
