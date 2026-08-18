@@ -37,6 +37,14 @@ export interface UsageMetric {
    * Unlike `resetsAt` nothing comes back afterwards.
    */
   expiresAt?: number | null;
+  /**
+   * The moment this pool has to reach. Set on a quota that backstops another
+   * one: it is being drawn on only because that window is spent, so what
+   * matters is whether it lasts until that window resets — after which the
+   * plan's own quota takes over again. It is a deadline to survive, not a
+   * reset of this metric, and only the provider module knows the relationship.
+   */
+  coversUntil?: number | null;
 }
 
 /** The plan itself, as distinct from what it allows: when it ends, and whether it renews. */

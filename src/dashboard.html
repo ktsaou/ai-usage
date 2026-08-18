@@ -280,6 +280,8 @@ function burnLine(p){
     const left=r.headroomHours>0?`empty in <b class="${lvl}">${fmtHours(r.headroomHours)}</b>`:`<b class="${lvl}">spent</b>`;
     let t=`<b class="${lvl}">${fmtRate(rate)}</b> now · ${left}`;
     // only when a resumed burst would actually beat the reset
+    // The comparison that decides it: what it has left against what it must cover.
+    if(r.bridging&&r.horizonHours) t+=` · needs <b class="${lvl}">${fmtHours(r.horizonHours)}</b>`;
     if(peak>rate&&r.peakHeadroomHours>0&&r.horizonHours&&r.peakHeadroomHours<r.horizonHours) t+=` · ${fmtHours(r.peakHeadroomHours)} at peak ${fmtRate(peak)}`;
     return `<div class="burn">${w}${t}</div>`;
   }

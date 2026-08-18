@@ -33,6 +33,7 @@ export function metric(
     rolling?: boolean;
     backstopped?: boolean;
     expiresAt?: number | null;
+    coversUntil?: number | null;
   } = {}
 ): UsageMetric {
   const remaining = used !== null && total !== null ? total - used : null;

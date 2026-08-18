@@ -199,6 +199,17 @@ marks such a window `backstopped`, and it is the reason that flag exists. The
 add-on metric has no window and does not reset: it carries `expiresAt`
 (the nearest pack's expiry), not `resetsAt`.
 
+**The packs are a bridge, and are judged as one.** They are only being drawn on
+because a plan window is spent, so the question they answer is *"do they last
+until that window resets?"* — after which the plan pays again. The fetcher puts
+the soonest spent window's reset on the pool as `coversUntil`, and the risk model
+uses it as that metric's deadline, so the ordinary burn-ratio rule applies
+unchanged: credits gone before the reset means `crit`. Without it the pool had no
+deadline at all and could never be at risk however fast it drained, which is the
+one thing it exists to warn about. `coversUntil` is not a reset of the pool and
+must not be rendered as one — surfaces say "must last …" / "needs …", and the
+metric's `bridging` flag marks the case.
+
 `reset-card/list` also exists (a different kind of top-up) and returns an empty
 list; it is deliberately not parsed until a populated sample is available. The gateway answers HTTP 200 even when logged out; session state is read
 from `errorCode` (`BailianGateway.Login.NotLogined`), never from a redirect —
@@ -231,7 +242,9 @@ Level rules:
 
 - **crit** — the quota is exhausted, or the rate over the last hour *and* over a
   confirming longer lookback (`min(6h, max(75m, windowLength/4))`) both exceed
-  what the quota can afford until it resets. Both lookbacks must agree: one busy
+  what the quota can afford until its deadline — the reset for an ordinary
+  window, one window length for a rolling one, and the covered window's reset
+  for a pool that backstops a spent one. Both lookbacks must agree: one busy
   minute otherwise flips a card to red and back, on a page meant to stay open.
 - **warn** — the peak hour would exhaust the quota within
   `min(horizonHours, 12h)`. The 12h cap is what makes the peak test meaningful:

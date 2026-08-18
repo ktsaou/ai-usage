@@ -69,6 +69,8 @@ export interface MetricRisk {
   /** Hours until the reset — or one window length for a rolling window, which has no reset. */
   horizonHours: number | null;
   rolling: boolean;
+  /** The horizon is a window this pool has to cover, not a reset of its own. */
+  bridging: boolean;
 }
 
 export interface SubscriptionRisk {
@@ -146,8 +148,21 @@ export function computeMetricRisk(
   // A rolling window never resets, so nothing is "left until" anything; the
   // question becomes whether the trailing window saturates within its own
   // length at this trend.
+  //
+  // A pool with no reset of its own can still have a deadline: when it is the
+  // backstop for a spent window, it has to last until that window resets, and
+  // `coversUntil` carries that moment. Without it such a pool could never be at
+  // risk however fast it drained — there was nothing to measure the burn
+  // against — which is exactly the case the packs exist for.
   const wMs = windowMs(metric);
-  const horizonMs = rolling ? wMs : metric.resetsAt ? metric.resetsAt - now : null;
+  const bridging = !rolling && !metric.resetsAt && !!metric.coversUntil;
+  const horizonMs = rolling
+    ? wMs
+    : metric.resetsAt
+      ? metric.resetsAt - now
+      : metric.coversUntil
+        ? metric.coversUntil - now
+        : null;
   const horizonHours = horizonMs !== null && horizonMs > 0 ? horizonMs / H : null;
 
   const short = rateFrom(history.metricAnchors(providerId, metric.name, SHORT_LOOKBACK_MS));
@@ -193,6 +208,7 @@ export function computeMetricRisk(
     burnRatio,
     horizonHours,
     rolling,
+    bridging,
   };
 }
 

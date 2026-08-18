@@ -44,7 +44,10 @@ function deadline(risk: any): string {
   if (!risk) return "";
   if (risk.rolling) return " (trailing window, no reset)";
   const h = hours(risk.horizonHours);
-  return h ? ` (resets in ${h})` : "";
+  if (!h) return "";
+  // A pool covering a spent window does not reset; it has to reach the moment
+  // that window does, and saying "resets in" would claim the opposite.
+  return risk.bridging ? ` (must last ${h}, until the spent window resets)` : ` (resets in ${h})`;
 }
 
 /** A rate that rounds to zero is not zero, and saying "0.0%/h" claims it is. */

@@ -256,3 +256,56 @@ test("a failed poll produces no risk at all, rather than a reassuring one", () =
   const result = { ...providerResult([quota(10)]), error: "boom" };
   assert.equal(computeProviderRisk(stubHistory({ percent: 10 }), result, NOW), null);
 });
+
+test("a pool covering a spent window is judged against that window's reset", () => {
+  // The packs exist to bridge the gap: 57% of them left, burning 2.3%/h, and the
+  // spent window resets in 52h. That is 25h of cover for a 52h gap.
+  const history = stubPerMetric({
+    weekly_quota: { percent: 100, short: 0, long: 0, peak: 0 },
+    addon_credits: { percent: 43, short: 2.3, long: 2.3, peak: 2.3 },
+  });
+  const result = providerResult([
+    quota(100, { name: "weekly_quota", window: "weekly", backstopped: true, resetsAt: NOW + 52 * H }),
+    quota(43, {
+      name: "addon_credits",
+      window: null,
+      resetsAt: null,
+      expiresAt: NOW + 700 * H,
+      coversUntil: NOW + 52 * H,
+    }),
+  ]);
+  const risk = computeProviderRisk(history, result, NOW)!;
+  const addon = risk.metrics.addon_credits;
+  assert.equal(addon.bridging, true);
+  assert.equal(Math.round(addon.horizonHours!), 52);
+  assert.ok(addon.headroomHours! < addon.horizonHours!, "runs out before the window resets");
+  assert.ok(addon.burnRatio! > 1);
+  assert.equal(addon.level, "crit");
+  assert.equal(risk.level, "crit"); // and it is the provider's binding constraint
+  assert.equal(risk.metric, "addon_credits");
+});
+
+test("the same pool is fine when it comfortably outlasts the gap", () => {
+  const history = stubPerMetric({
+    weekly_quota: { percent: 100, short: 0, long: 0, peak: 0 },
+    addon_credits: { percent: 10, short: 0.5, long: 0.5, peak: 0.5 },
+  });
+  const result = providerResult([
+    quota(100, { name: "weekly_quota", window: "weekly", backstopped: true, resetsAt: NOW + 20 * H }),
+    quota(10, { name: "addon_credits", window: null, resetsAt: null, coversUntil: NOW + 20 * H }),
+  ]);
+  const risk = computeProviderRisk(history, result, NOW)!;
+  assert.equal(risk.metrics.addon_credits.level, "ok"); // 180h of cover for a 20h gap
+  assert.equal(risk.level, "ok");
+});
+
+test("with no window to cover, a pool has no deadline and says so", () => {
+  const history = stubPerMetric({ addon_credits: { percent: 10, short: 0.5, long: 0.5, peak: 0.5 } });
+  const result = providerResult([
+    quota(10, { name: "addon_credits", window: null, resetsAt: null, coversUntil: null }),
+  ]);
+  const addon = computeProviderRisk(history, result, NOW)!.metrics.addon_credits;
+  assert.equal(addon.bridging, false);
+  assert.equal(addon.horizonHours, null);
+  assert.equal(addon.burnRatio, null);
+});

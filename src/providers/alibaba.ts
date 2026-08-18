@@ -237,6 +237,10 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
     const addonCovers = hasAddon && Number.isFinite(addonLeft) && addonLeft > 0;
 
     const metrics: UsageMetric[] = [];
+    // The packs are only being drawn on because a plan window is spent, so what
+    // they have to do is last until that window resets. Collected here and
+    // handed to the pool below as the deadline it must reach.
+    const bridgeUntil: number[] = [];
     // Percentages arrive as 0..1 fractions.
     const windows: Array<[string, string, string, string]> = [
       ["5h_quota", "5h", "per5HourPercentage", "per5HourResetTime"],
@@ -246,11 +250,14 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
       const fraction = Number(usage.data[pctKey]);
       if (!Number.isFinite(fraction)) continue;
       const percent = fraction * 100;
+      // Only once it is actually spent: a window still being consumed is the
+      // real constraint, whether or not packs are held in reserve.
+      const spent = percent >= 100 && addonCovers;
+      const resetsAt = Number(usage.data[resetKey]);
+      if (spent && Number.isFinite(resetsAt) && resetsAt > 0) bridgeUntil.push(resetsAt);
       metrics.push(
         metric(name, percent, 100, "%", window, usage.data[resetKey] ?? null, {
-          // Only once it is actually spent: a window still being consumed is the
-          // real constraint, whether or not packs are held in reserve.
-          ...(percent >= 100 && addonCovers
+          ...(spent
             ? { backstopped: true, note: "plan quota spent — usage now comes from the extra packs" }
             : {}),
         })
@@ -264,6 +271,8 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
         metric("addon_credits", addonTotal - addonLeft, addonTotal, "credits", null, null, {
           note: `extra usage packs${Number.isFinite(packs) ? ` (${packs} active)` : ""} — spent after the plan quota, and they expire rather than reset`,
           expiresAt: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : null,
+          // The soonest spent window's reset: reach it and the plan pays again.
+          coversUntil: bridgeUntil.length ? Math.min(...bridgeUntil) : null,
         })
       );
     }
