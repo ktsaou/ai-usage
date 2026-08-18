@@ -136,15 +136,23 @@ header{
   box-shadow:0 12px 32px rgba(0,0,0,.45),0 0 0 1px var(--accent,#2dd4bf) inset}
 .card.down{opacity:.72}
 .card-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}
-.pname{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px}
+.pname{display:flex;align-items:center;gap:9px;font-weight:600;font-size:14px;color:var(--muted)}
+.pname b{color:var(--text);font-weight:600}
 .pname .pdot{width:8px;height:8px;border-radius:50%;background:var(--accent,#2dd4bf);box-shadow:0 0 8px var(--accent,#2dd4bf);flex:none}
+/* Plain text, not a box: one pill per card, and it is the verdict. */
 .plan-badge{
   font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
-  color:var(--accent,#2dd4bf);border:1px solid var(--accent,#2dd4bf);
-  padding:3px 8px;border-radius:5px;opacity:.9;
+  color:var(--faint);
 }
-.status-chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;
-  font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+/* The verdict, not the provider name, is what the eye should land on. A healthy
+   card stays quiet — six green pills competing for attention is the same problem
+   in reverse — so only ok is muted and unfilled. */
+.status-chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;
+  font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  padding:3px 9px;border-radius:999px;border:1px solid transparent}
+.status-chip.warn{color:var(--warn);background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.38)}
+.status-chip.crit{color:var(--crit);background:rgba(248,113,113,.14);border-color:rgba(248,113,113,.42)}
+.status-chip.down{color:var(--down);background:rgba(100,116,139,.16);border-color:rgba(100,116,139,.45)}
 .big-row{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px}
 .big-pct{font-family:var(--mono);font-weight:700;font-size:46px;line-height:.95;letter-spacing:-.03em}
 .big-pct .unit{font-size:19px;color:var(--muted);font-weight:600;margin-left:2px}
@@ -348,7 +356,7 @@ function injectCached(){
     if(big&&pg&&pg.ready){ big.className='big-pct '+pg.lvl; big.innerHTML=(pg.bigUnit==='USD'?'$'+usd(pg.big):fmtNum(pg.big))+`<span class="unit">${pg.bigUnit==='USD'?'':pg.bigUnit}</span>`; }
     if(side&&pg&&pg.ready){ const wd=(providersData.find(x=>x.id===id)||{}).spendWindowDays||7; side.innerHTML=`<div class="big-used">${pg.mode==='balance'?'remaining':'spent · '+wd+'d'}</div><div class="big-total">${pg.sub||''}</div>`; }
     if(bar&&pg&&pg.ready){ bar.innerHTML=pg.barPct!=null?`<div class="bar"><div class="fill ${pg.lvl}" style="width:${Math.min(pg.barPct,100)}%"></div></div>`:''; }
-    if(chip&&pg){ chip.innerHTML=pg.ready?`<span class="dot ${pg.lvl}"></span>${pg.lvl==='ok'?'ok':pg.lvl}`:`<span class="dot down"></span>…`; }
+    if(chip&&pg){ chip.className='status-chip '+(pg.ready?pg.lvl:''); chip.innerHTML=pg.ready?`<span class="dot ${pg.lvl}"></span>${pg.lvl==='crit'?'at risk':pg.lvl==='warn'?'elevated':'ok'}`:`<span class="dot down"></span>…`; }
   }
 }
 
@@ -360,18 +368,18 @@ function renderProviders(){
     const accent=colorFor(p.id); const lf=p.lastFetch; const settled=firstBuildDone?' settled':'';
     if(p.parked){
       return `<div class="card down${settled}" style="--accent:${accent}">
-        <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span>${esc(p.name)}</div>
-        <span class="status-chip"><span class="dot down"></span>parked</span></div>
+        <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span><b>${esc(p.name)}</b></div>
+        <span class="status-chip down"><span class="dot down"></span>parked</span></div>
         <div class="err-msg" style="color:var(--faint)">monitoring paused · needs an active browser session</div></div>`;
     }
-    if(!lf){ return `<div class="card${settled}" style="--accent:${accent}"><div class="card-top"><div class="pname"><span class="pdot"></span>${esc(p.name)}</div></div><div class="empty">waiting for first poll…</div></div>`; }
+    if(!lf){ return `<div class="card${settled}" style="--accent:${accent}"><div class="card-top"><div class="pname"><span class="pdot"></span><b>${esc(p.name)}</b></div></div><div class="empty">waiting for first poll…</div></div>`; }
     if(lf.error){ crit++;
       // No reading at all: neither ok nor at risk, and saying either would be a
       // guess. The error text is the whole story.
       return `<div class="card down${settled}" style="--accent:${accent}">
-        <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span>${esc(p.name)}</div>
+        <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span><b>${esc(p.name)}</b></div>
         <div style="display:flex;gap:8px;align-items:center">${lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:''}
-        <span class="status-chip"><span class="dot down"></span>down</span></div></div>
+        <span class="status-chip down"><span class="dot down"></span>down</span></div></div>
         <div class="err-msg">⚠ ${esc(lf.error)}</div></div>`;
     }
     live++;
@@ -400,7 +408,7 @@ function renderProviders(){
       bigRow=`<div class="big-row"><div class="big-pct ${rlvl}">${bigVal}<span class="unit">${bigUnit}</span></div><div class="big-side">${side}</div></div>`;
       barHtml=pct!==null?`<div class="bar"><div class="fill ${rlvl}" style="width:${Math.min(pct,100)}%"></div></div>`:'';
       barHtml+=burnLine(p);
-      chipHtml=`<span class="status-chip"><span class="dot ${rlvl}"></span>${riskWord(rlvl)}</span>`;
+      chipHtml=`<span class="status-chip ${rlvl}"><span class="dot ${rlvl}"></span>${riskWord(rlvl)}</span>`;
     }
     const planBadge=lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:(mode?`<span class="plan-badge">${mode}</span>`:'');
     // Every window carries its own countdown: the headline is only one of a
@@ -416,7 +424,7 @@ function renderProviders(){
         :'<span style="color:var(--faint)">no reset window</span>';
     const reason=rlvl==='down'?`<div class="err-msg">⚠ ${downReason(p)}</div>`:'';
     return `<div class="card${rlvl==='down'?' down':''}${settled}" style="--accent:${accent}">
-      <div class="card-top"><div class="pname"><span class="pdot"></span>${esc(p.name)}</div>
+      <div class="card-top"><div class="pname"><span class="pdot"></span><b>${esc(p.name)}</b></div>
         <div style="display:flex;gap:8px;align-items:center">${planBadge}${chipHtml}</div></div>
       ${reason}${bigRow}${barHtml}
       <div class="card-foot"><span class="reset"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${resetSpan}</span><span data-spark="${p.id}"></span></div>

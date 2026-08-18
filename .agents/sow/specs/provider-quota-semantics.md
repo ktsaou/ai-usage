@@ -407,7 +407,12 @@ removing the confirmation entirely was worse on every count (15 and 269).
   percent used** (most exhausted / binding constraint), not a fixed window
   preference. Non-primary metrics render as sub-bars. On Kimi this headlines the
   weekly quota when it is near-exhausted.
-- **Dashboard risk**: the status chip reads `ok` / `watch` / `at risk` from the
+- **Dashboard emphasis**: the verdict is what a card is scanned for, so it carries
+  the weight — the chip is a coloured pill (`elevated` / `at risk` / `down`) and is
+  the only pill on the card; the plan badge is plain faint text and the provider
+  name sits a size below what it was. `ok` stays muted and unfilled: a wall of
+  green pills is the same problem in reverse. The chip reads `ok` / `elevated` /
+  `at risk` / `down` from the
   provider's risk, and the headline number, its bar and every sub-row bar are
   coloured by risk rather than by fill — a green 41% beside an "at risk" chip is
   read as green, and since the risk never reports better than the fill level,
