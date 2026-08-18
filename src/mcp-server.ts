@@ -122,7 +122,8 @@ const LEGEND = [
   "  ok        = at the current rate (last 60 minutes) this quota reaches its deadline.",
   "  elevated  = the current rate reaches it, but the peak rate (busiest 60 minutes of the last 24h) would not.",
   "  at risk   = at the current rate it does NOT reach its deadline, or it is already empty.",
-  "  down      = no usable reading, or the plan is no longer valid. Figures shown are stale.",
+  "  down      = two polls in a row failed, or the plan is no longer valid. No figures are shown.",
+  "  CACHED    = one poll failed; the figures are the last good ones and their age is stated. Not current.",
   "  deadline  = the quota's own reset; for a pool covering a spent window, that window's reset.",
   "  headroom  = time until exhausted at the current rate. burn ratio = deadline / headroom, so above 1 means it runs out first.",
   "  a subscription term ending is a renewal anniversary, not a quota reset; it normally passes with nothing changing.",
@@ -140,18 +141,23 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
       const data = await backend.listProviders();
       const lines = (data.providers || []).filter((p: any) => !p.parked).map((p: any) => {
         const lf = p.lastFetch;
+        const summary = lf
+          ? `${lf.metrics.length} metrics${lf.plan ? " · plan " + lf.plan : ""}${p.payg ? " · payg:" + p.payg : ""}`
+          : "";
         const state = p.parked
           ? "PARKED (needs browser session)"
           : !lf
             ? "pending"
-            : lf.error
+            : lf.state === "down"
               ? `DOWN — no reading: ${lf.error}`
-              : `${lf.metrics.length} metrics${lf.plan ? " · plan " + lf.plan : ""}${p.payg ? " · payg:" + p.payg : ""}`;
+              : lf.state === "stale"
+                ? `${summary} · CACHED from ${toRfc3339(lf.fetchedAt)} (${countdown(Date.now() - lf.fetchedAt)} old): the last poll failed (${lf.error}), these are the previous readings. One more failure and this provider is reported down.`
+                : summary;
         // The binding window's burn figures: the provider's risk is whichever
         // of its windows runs out first, so that is the one worth listing.
-        const burn = lf && !lf.error ? burnSummary(p.risk?.binding) : null;
+        const burn = lf && lf.state !== "down" ? burnSummary(p.risk?.binding) : null;
         const detail = burn ? `\n    ${p.risk.metric}${deadline(p.risk.binding)}: ${burn}` : "";
-        const plan = lf && !lf.error ? planLine(p.risk) : null;
+        const plan = lf && lf.state !== "down" ? planLine(p.risk) : null;
         return `- ${p.id} (${p.name}): ${state}${detail}${plan ? `\n    ${plan}` : ""}`;
       });
       return {
@@ -172,9 +178,15 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
     },
     async ({ provider }) => {
       const data = await backend.queryProvider(provider);
-      if (data.error) {
+      if (data.error && !data.cachedAt) {
         return { content: [{ type: "text", text: `# ${name} — ${provider}\nError: ${data.error}` }] };
       }
+      // Readings plus an error means the live call failed and these are the last
+      // good ones. Say so first, with their age: a model that reads figures
+      // without knowing they are a minute old will act on a stale board.
+      const cached = data.cachedAt
+        ? `CACHED DATA — the live poll just failed (${data.error}). Every figure below was measured at ${toRfc3339(data.cachedAt)}, ${countdown(Date.now() - data.cachedAt)} ago, and nothing has been read since. They are the last known good values, not current ones.`
+        : null;
       if (data.parked) {
         return {
           content: [{ type: "text", text: `# ${name} — ${provider}\nParked: this provider is not actively monitored (it requires a live browser session). It is excluded from list_providers and has no queryable usage.` }],
@@ -227,7 +239,7 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         content: [
           {
             type: "text",
-            text: `# ${name} — remaining usage\n${head}${plan ? `\n  ${plan}` : ""}\n${lines.join("\n") || "  (no metrics)"}\n\n${LEGEND}`,
+            text: `# ${name} — remaining usage\n${head}${cached ? `\n  ${cached}` : ""}${plan ? `\n  ${plan}` : ""}\n${lines.join("\n") || "  (no metrics)"}\n\n${LEGEND}`,
           },
         ],
       };

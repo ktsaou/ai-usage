@@ -246,9 +246,15 @@ Level rules, in the terms they are meant to be read:
 - **elevated** (`warn`) — the current rate reaches it, but the **peak rate** (the
   worst sixty minutes of the last 24h) would not, measured all the way to the
   deadline.
-- **down** — no usable reading (the poll failed, a session died) **or** the plan
-  is not usable: its term passed without renewing, or the provider calls it
-  invalid. Worse than at risk: at risk means it will run out, down means there is
+- **stale** — **one** poll failed. The previous readings are served with their
+  age stated, and the card, the MCP and Prometheus all say they are cached. A
+  single failure is not an outage: transient network faults happen a handful of
+  times on a normal day, and one of them took three providers to `down` for a
+  minute, which reads as "these subscriptions are gone".
+- **down** — **two consecutive** polls failed, a session died, or the plan is not
+  usable: its term passed without renewing, or the provider calls it invalid.
+  A provider with nothing cached is down on its first failure, since there is
+  nothing to be stale about. Worse than at risk: at risk means it will run out, down means there is
   nothing to run out of. A failed poll still cannot be told apart from a plan
   that vanished, but a term that lapsed now can be, and is.
 - **no rate measurable** — a quota nobody has touched for 24h, or the first
@@ -459,6 +465,18 @@ removing the confirmation entirely was worse on every count (15 and 269).
   the risk fields are about eight numbers per metric and grew the refresh by
   roughly 0.9 KB). `GET /api/history/:id?days=N` still returns raw samples for
   manual export; nothing polls it.
+- **Serving cached readings**: the scheduler keeps the last *successful* result
+  and a consecutive-failure count. `/api/providers` carries `state`, `error` and
+  `failures` alongside the figures, so every renderer agrees on whether they are
+  current. `query_provider` performs a live call and, when that fails, falls back
+  to the cached result rather than answering "error" while holding readings from
+  a minute ago — labelled `CACHED DATA` with the exact timestamp and age, because
+  a model given figures without their age will act on a stale board. An on-demand
+  call failing does **not** count towards `down`: only the scheduler's own cadence
+  does, or a caller could drive a provider down by asking twice.
+- **`ai_usage_provider_state`**: 0 polling normally, 1 cached, 2 down. Without it
+  the only surface that can page someone cannot tell them a provider stopped
+  answering — the quota gauges would simply stop changing.
 - **Where risk is computed**: once per poll, in the scheduler, cached in memory.
   The dashboard, `/metrics` and the MCP all read that cache, so the three small
   indexed queries per metric are paid once a minute rather than once per viewer

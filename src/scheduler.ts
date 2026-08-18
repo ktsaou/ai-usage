@@ -3,9 +3,43 @@ import { fetchProvider } from "./providers/fetch.js";
 import { DB } from "./db.js";
 import { computeProviderRisk, type ProviderRisk } from "./risk.js";
 
+/**
+ * How a provider is doing, as distinct from what its quotas say.
+ *
+ * `stale` exists because a single failed poll is not an outage. A one-second
+ * network fault made three providers report `down` for a minute, which read as
+ * "these subscriptions are gone" — the strongest alarm the monitor has, for a
+ * blip that happens a handful of times on a normal day. One miss now keeps the
+ * last good numbers and says how old they are; it takes two to call it down.
+ */
+export type ProviderState = "ok" | "stale" | "down";
+
+/** Consecutive failed polls before a provider is reported down. */
+const DOWN_AFTER_FAILURES = 2;
+
+/**
+ * `down` needs two consecutive failures **and** is the only outcome when there
+ * is nothing cached to fall back on — a provider that has never answered cannot
+ * be called merely stale.
+ */
+export function providerState(failures: number, hasCachedResult: boolean): ProviderState {
+  if (failures === 0) return "ok";
+  return hasCachedResult && failures < DOWN_AFTER_FAILURES ? "stale" : "down";
+}
+
+export interface ProviderHealth {
+  state: ProviderState;
+  /** The last poll that succeeded. Kept through failures so it can still be served. */
+  result: ProviderResult | null;
+  failures: number;
+  error: string | null;
+  erroredAt: number | null;
+}
+
 export class Scheduler {
   private timers: Map<string, ReturnType<typeof setInterval>> = new Map();
   private lastResults: Map<string, ProviderResult> = new Map();
+  private failures: Map<string, { count: number; error: string; at: number }> = new Map();
   private risks: Map<string, ProviderRisk> = new Map();
   private config: AppConfig;
   private db: DB;
@@ -39,11 +73,20 @@ export class Scheduler {
     if (!config) return;
 
     const result = await fetchProvider(config);
-    this.lastResults.set(providerId, result);
 
     if (result.error) {
+      // The previous good result is deliberately kept: it is what gets served,
+      // labelled with its age, until a second consecutive failure.
+      const prev = this.failures.get(providerId);
+      this.failures.set(providerId, {
+        count: (prev?.count ?? 0) + 1,
+        error: result.error,
+        at: result.fetchedAt,
+      });
       console.error(`[scheduler] ${providerId}: ERROR ${result.error}`);
     } else {
+      this.lastResults.set(providerId, result);
+      this.failures.delete(providerId);
       this.db.store(result);
       this.updateRisk(result);
       console.log(`[scheduler] ${providerId}: ${result.metrics.length} metrics stored`);
@@ -96,16 +139,29 @@ export class Scheduler {
       };
     }
     const result = await fetchProvider(config);
-    this.lastResults.set(providerId, result);
     if (!result.error) {
+      this.lastResults.set(providerId, result);
+      this.failures.delete(providerId);
       this.db.store(result);
       this.updateRisk(result);
     }
+    // A failure here does not count towards `down`. This runs on demand — an
+    // MCP caller could otherwise drive a provider down by asking twice — so the
+    // scheduler's own cadence stays the authority on whether one is dead.
     return result;
   }
 
+  /** The last poll that succeeded, which may predate one or more failures. */
   getLastResult(providerId: string): ProviderResult | undefined {
     return this.lastResults.get(providerId);
+  }
+
+  getHealth(providerId: string): ProviderHealth {
+    const result = this.lastResults.get(providerId) ?? null;
+    const f = this.failures.get(providerId);
+    const failures = f?.count ?? 0;
+    const state = providerState(failures, !!result);
+    return { state, result, failures, error: f?.error ?? null, erroredAt: f?.at ?? null };
   }
 
   getRisk(providerId: string): ProviderRisk | undefined {

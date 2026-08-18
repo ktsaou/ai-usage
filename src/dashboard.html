@@ -187,6 +187,7 @@ header{
 .sub-m .rst{color:var(--faint);width:58px;text-align:right;flex:none;font-size:10px}
 .sub-m .rst b{color:var(--muted);font-weight:600}
 .err-msg{font-family:var(--mono);font-size:11.5px;color:var(--crit);line-height:1.5;padding:8px 0 4px}
+.stale-msg{font-family:var(--mono);font-size:10.5px;color:var(--warn);line-height:1.5;padding:2px 0 8px;opacity:.9}
 
 footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--border);
   display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
@@ -271,7 +272,7 @@ function primaryMetric(metrics){
 
 // Burn figures come ready-made from /api/providers — the model lives in
 // src/risk.ts and is computed once per poll, not once per viewer.
-const RANK={crit:2,warn:1,ok:0};
+const RANK={down:3,crit:2,warn:1,ok:0};
 const riskWord=l=>l==='down'?'down':l==='crit'?'at risk':l==='warn'?'elevated':'ok';
 const fmtRate=r=>r>0&&r<0.05?'<0.1%/h':(r>=10?Math.round(r):Math.round(r*10)/10)+'%/h';
 // One duration format everywhere: a decimal '1.8h' next to a '1h 28m' countdown
@@ -314,7 +315,9 @@ function downReason(p){
 function cardRank(p){
   if(p.parked)return -1;
   const lf=p.lastFetch;
-  if(lf&&lf.error)return 2;
+  // `error` is set while merely stale too, so rank on the state: a card whose
+  // numbers are a minute old must not outrank one that is actually running out.
+  if(lf&&lf.state==='down')return 3;
   // A pay-as-you-go card shows its own runway level, not the burn-rate risk, so
   // rank it by what it displays — promoting a card that reads "ok" is worse than
   // leaving it in place.
@@ -373,7 +376,7 @@ function renderProviders(){
         <div class="err-msg" style="color:var(--faint)">monitoring paused · needs an active browser session</div></div>`;
     }
     if(!lf){ return `<div class="card${settled}" style="--accent:${accent}"><div class="card-top"><div class="pname"><span class="pdot"></span><b>${esc(p.name)}</b></div></div><div class="empty">waiting for first poll…</div></div>`; }
-    if(lf.error){ crit++;
+    if(lf.state==='down'){ crit++;
       // No reading at all: neither ok nor at risk, and saying either would be a
       // guess. The error text is the whole story.
       return `<div class="card down${settled}" style="--accent:${accent}">
@@ -422,7 +425,9 @@ function renderProviders(){
       :prim&&prim.expiresAt
         ?`expires in <b data-reset="${prim.expiresAt}">${fmtCountdown(prim.expiresAt-Date.now())||'now'}</b>`
         :'<span style="color:var(--faint)">no reset window</span>';
-    const reason=rlvl==='down'?`<div class="err-msg">⚠ ${downReason(p)}</div>`:'';
+    const reason=rlvl==='down'?`<div class="err-msg">⚠ ${downReason(p)}</div>`
+      // One failed poll: the numbers stand, with their age and what went wrong.
+      :lf.state==='stale'?`<div class="stale-msg">⚠ cached — last read ${new Date(lf.fetchedAt).toLocaleTimeString('en-GB')} · ${esc(lf.error||'poll failed')}</div>`:'';
     return `<div class="card${rlvl==='down'?' down':''}${settled}" style="--accent:${accent}">
       <div class="card-top"><div class="pname"><span class="pdot"></span><b>${esc(p.name)}</b></div>
         <div style="display:flex;gap:8px;align-items:center">${planBadge}${chipHtml}</div></div>

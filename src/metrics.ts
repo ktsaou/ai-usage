@@ -8,7 +8,11 @@ const LEVEL_VALUE: Record<RiskLevel, number> = { ok: 0, warn: 1, crit: 2, down: 
  * quota is not being consumed at all: dropping the series instead would make
  * every alert expression fall through the gap exactly when nothing is wrong.
  */
-export function renderMetrics(db: DB, riskFor?: (providerId: string) => ProviderRisk | undefined): string {
+export function renderMetrics(
+  db: DB,
+  riskFor?: (providerId: string) => ProviderRisk | undefined,
+  stateFor?: (providerId: string) => "ok" | "stale" | "down" | undefined
+): string {
   const rows = db.allLatest();
   const lines: string[] = [];
 
@@ -36,6 +40,8 @@ export function renderMetrics(db: DB, riskFor?: (providerId: string) => Provider
   lines.push("# TYPE ai_usage_plan_seconds_remaining gauge");
   lines.push("# HELP ai_usage_plan_auto_renew Whether the subscription renews itself: 1 yes, 0 no");
   lines.push("# TYPE ai_usage_plan_auto_renew gauge");
+  lines.push("# HELP ai_usage_provider_state 0 polling normally, 1 one poll failed and the figures are cached, 2 down (two or more consecutive failures)");
+  lines.push("# TYPE ai_usage_provider_state gauge");
 
   for (const row of rows) {
     const labels = `provider="${row.provider_id}",name="${row.provider_name}",metric="${row.metric_name}",unit="${row.unit}",window="${row.window || ""}"`;
@@ -75,9 +81,13 @@ export function renderMetrics(db: DB, riskFor?: (providerId: string) => Provider
   for (const row of rows) {
     if (seen.has(row.provider_id)) continue;
     seen.add(row.provider_id);
+    const labels = `provider="${row.provider_id}",name="${row.provider_name}"`;
+    // Without this the only surface that can page someone cannot tell them a
+    // provider stopped answering: the quota gauges simply stop changing.
+    const state = stateFor?.(row.provider_id);
+    if (state) lines.push(`ai_usage_provider_state{${labels}} ${state === "down" ? 2 : state === "stale" ? 1 : 0}`);
     const sub = riskFor?.(row.provider_id)?.subscription;
     if (!sub) continue;
-    const labels = `provider="${row.provider_id}",name="${row.provider_name}"`;
     if (sub.endsAt !== null) {
       lines.push(`ai_usage_plan_seconds_remaining{${labels}} ${Math.round((sub.endsAt - now) / 1000)}`);
     }

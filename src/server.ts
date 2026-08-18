@@ -28,7 +28,8 @@ function providerLevelRisk({ metrics, ...rest }: ProviderRisk) {
 
 export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
   const providers = config.providers.map((p) => {
-    const last = scheduler.getLastResult(p.id);
+    const health = scheduler.getHealth(p.id);
+    const last = health.result ?? undefined;
     const risk = scheduler.getRisk(p.id);
     return {
       id: p.id,
@@ -44,15 +45,21 @@ export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
       // The provider-level risk is the risk of whichever window binds first;
       // `metrics` carries it split out again per window.
       risk: risk ? providerLevelRisk(risk) : null,
+      // `fetchedAt` is when these numbers were measured, which is not "now" once
+      // a poll has failed — `state` and `error` say whether to trust them.
       lastFetch: last
         ? {
             fetchedAt: last.fetchedAt,
-            error: last.error,
+            state: health.state,
+            error: health.error,
+            failures: health.failures,
             plan: last.plan,
             subscription: last.subscription ?? null,
             metrics: withRisk(last.metrics, risk),
           }
-        : null,
+        : health.error
+          ? { fetchedAt: health.erroredAt, state: health.state, error: health.error, failures: health.failures, plan: null, subscription: null, metrics: [] }
+          : null,
     };
   });
   return { service: config.service || {}, providers };
@@ -115,13 +122,26 @@ export function buildInProcessBackend(config: AppConfig, scheduler: Scheduler): 
     listProviders: async () => buildProvidersPayload(config, scheduler),
     queryProvider: async (id: string) => {
       const r = await scheduler.queryNow(id);
+      const parked = !!config.providers.find((p) => p.id === id)?.parked;
       const risk = scheduler.getRisk(id);
-      return {
-        ...r,
-        metrics: withRisk(r.metrics, risk),
+      const shape = (res: any, cachedAt: number | null, error: string | null) => ({
+        ...res,
+        metrics: withRisk(res.metrics, risk),
         risk: risk ? providerLevelRisk(risk) : null,
-        parked: !!config.providers.find((p) => p.id === id)?.parked,
-      };
+        cachedAt,
+        error,
+        parked,
+      });
+      if (!r.error) return shape(r, null, null);
+
+      // The live call failed. Answering "error" while holding readings from a
+      // minute ago is less useful than answering with them and their age — but
+      // only while the scheduler still considers the provider alive.
+      const health = scheduler.getHealth(id);
+      if (health.result && health.state !== "down") {
+        return shape(health.result, health.result.fetchedAt, r.error);
+      }
+      return shape(r, null, r.error);
     },
   };
 }
@@ -208,7 +228,7 @@ export function createServer(config: AppConfig, db: DB, scheduler: Scheduler) {
   });
 
   app.get("/metrics", (c) => {
-    const body = renderMetrics(db, (id) => scheduler.getRisk(id));
+    const body = renderMetrics(db, (id) => scheduler.getRisk(id), (id) => scheduler.getHealth(id).state);
     return c.text(body, 200, { "Content-Type": "text/plain; version=0.0.4; charset=utf-8" });
   });
 
