@@ -265,7 +265,9 @@ function primaryMetric(metrics){
 const RANK={crit:2,warn:1,ok:0};
 const riskWord=l=>l==='crit'?'at risk':l==='warn'?'watch':'ok';
 const fmtRate=r=>r>0&&r<0.05?'<0.1%/h':(r>=10?Math.round(r):Math.round(r*10)/10)+'%/h';
-function fmtHours(h){ if(h===null||h===undefined||!isFinite(h))return '–'; if(h>=48)return (h/24).toFixed(1)+'d'; if(h>=1)return (Math.round(h*10)/10)+'h'; return Math.round(h*60)+'m'; }
+// One duration format everywhere: a decimal '1.8h' next to a '1h 28m' countdown
+// made the reader convert one to compare them. fmtCountdown is that format.
+function fmtHours(h){ return (h===null||h===undefined||!isFinite(h))?'–':fmtCountdown(h*3600000); }
 
 // What the card is really telling you: at this pace, how long does it last.
 // Named windows, because the window that runs out first is often not the one
@@ -275,12 +277,14 @@ function burnLine(p){
   const lvl=p.risk.level, rate=r.ratePerHour, peak=r.peakRatePerHour;
   const w=`<span class="w">${pretty(p.risk.metric).replace(/ Quota$/,'')}</span>`;
   if(rate>0){
-    let t=`<b class="${lvl}">${fmtRate(rate)}</b> now · empty in <b class="${lvl}">${fmtHours(r.headroomHours)}</b>`;
+    const left=r.headroomHours>0?`empty in <b class="${lvl}">${fmtHours(r.headroomHours)}</b>`:`<b class="${lvl}">spent</b>`;
+    let t=`<b class="${lvl}">${fmtRate(rate)}</b> now · ${left}`;
     // only when a resumed burst would actually beat the reset
-    if(peak>rate&&r.peakHeadroomHours!=null&&r.horizonHours&&r.peakHeadroomHours<r.horizonHours) t+=` · ${fmtHours(r.peakHeadroomHours)} at peak ${fmtRate(peak)}`;
+    if(peak>rate&&r.peakHeadroomHours>0&&r.horizonHours&&r.peakHeadroomHours<r.horizonHours) t+=` · ${fmtHours(r.peakHeadroomHours)} at peak ${fmtRate(peak)}`;
     return `<div class="burn">${w}${t}</div>`;
   }
-  if(peak>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> if it resumes</div>`;
+  if(peak>0&&r.peakHeadroomHours>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> if it resumes</div>`;
+  if(peak>0) return `<div class="burn">${w}idle · <b class="${lvl}">spent</b></div>`;
   return `<div class="burn">${w}no usage in the last 24h</div>`;
 }
 

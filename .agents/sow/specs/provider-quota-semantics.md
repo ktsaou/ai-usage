@@ -326,9 +326,17 @@ without re-running it is guesswork.
   something else — the MCP output is consumed by assistants that otherwise
   infer meaning from the name alone. None of the three is stored in SQLite or
   exported to Prometheus; they are descriptive, not historical.
-- **MCP countdown** (`resets in …`): units descend `d h m s`; **days is the
-  largest unit (no months)**; zero units trimmed; `now` when <= 0. Lifetime
-  balances (no reset) show no countdown.
+- **Durations use one format, everywhere**: at most two units, largest first —
+  `45s`, `1m 30s`, `1h 48m`, `3d 4h`; days is the largest unit (no months);
+  `now` when <= 0. This covers reset and expiry countdowns, headroom, and the
+  plan's remaining time, on every surface. Derived figures used to print as
+  decimals (`1.8h`, `8.6d`) while countdowns printed as `1h 28m`, so comparing
+  "empty in 1.8h" against "resets in 1h 28m" — the comparison those two numbers
+  exist for — required converting one of them. The rule is implemented twice,
+  `countdown()` in `src/mcp-server.ts` and `fmtCountdown()` in
+  `src/dashboard.html`, because the dashboard has no build step; keep them in
+  step. Lifetime balances (no reset) show no countdown, and a headroom of zero
+  is rendered as the state (`spent`) rather than as a duration.
 - **MCP reset timestamp**: RFC 3339 UTC, seconds precision (e.g. `2026-07-28T12:59:00Z`).
 - **Dashboard headline**: the card's primary metric is the one with the **highest
   percent used** (most exhausted / binding constraint), not a fixed window

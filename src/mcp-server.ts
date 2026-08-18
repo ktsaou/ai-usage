@@ -30,12 +30,10 @@ function planLine(risk: any): string | null {
   return parts.join(" · ");
 }
 
-/** Hours as something readable: `40m`, `3.1h`, `2.4d`. */
+/** The one duration format, from a figure already measured in hours. */
 function hours(h: number | null | undefined): string | null {
   if (h === null || h === undefined || !Number.isFinite(h)) return null;
-  if (h >= 48) return `${(h / 24).toFixed(1)}d`;
-  if (h >= 1) return `${h.toFixed(1)}h`;
-  return `${Math.round(h * 60)}m`;
+  return countdown(h * 3600000);
 }
 
 /**
@@ -71,12 +69,12 @@ function burnSummary(risk: any): string | null {
   else if (now !== null && now !== undefined) parts.push(`burn ${rate(now)}`);
   if (peak > 0 && peak > now) parts.push(`peak 24h ${rate(peak)}`);
 
-  const head = hours(risk.headroomHours);
+  const head = risk.headroomHours > 0 ? hours(risk.headroomHours) : null;
   if (head) parts.push(`headroom ${head}`);
   // The peak-rate headroom is only worth stating when a resumed burst would
   // actually beat the deadline; otherwise it is a large number about nothing.
   const peakHead = hours(risk.peakHeadroomHours);
-  if (peakHead && risk.horizonHours && risk.peakHeadroomHours < risk.horizonHours) {
+  if (peakHead && risk.peakHeadroomHours > 0 && risk.horizonHours && risk.peakHeadroomHours < risk.horizonHours) {
     parts.push(`${peakHead} at peak pace`);
   }
   if (risk.burnRatio !== null && risk.burnRatio !== undefined) {
@@ -85,19 +83,24 @@ function burnSummary(risk: any): string | null {
   return parts.join(" · ");
 }
 
-function countdown(ms: number): string {
+/**
+ * Every duration this project prints, in one format: at most two units, largest
+ * first. There used to be a second, decimal one (`1.8h`, `2.4d`) for derived
+ * figures, which meant a reader comparing "empty in 1.8h" against "resets in
+ * 1h 28m" had to convert one of them — at exactly the moment those two numbers
+ * are worth comparing. Mirrored by fmtCountdown() in src/dashboard.html.
+ */
+export function countdown(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "now";
   const s = Math.floor(ms / 1000);
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
-  const parts: string[] = [];
-  if (d) parts.push(`${d}d`);
-  if (h) parts.push(`${h}h`);
-  if (m) parts.push(`${m}m`);
-  if (sec || parts.length === 0) parts.push(`${sec}s`);
-  return parts.join(" ");
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${sec}s`;
+  return `${sec}s`;
 }
 
 export function buildMcpServer(opts: { name: string; idHint: string; backend: McpBackend }): McpServer {
