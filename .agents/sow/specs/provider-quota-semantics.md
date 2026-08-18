@@ -396,7 +396,7 @@ removing the confirmation entirely was worse on every count (15 and 269).
   nothing the colour previously said is lost. Under the bar, a **burn line**
   names the binding window and states the pace and what it leaves:
   `WEEKLY 3%/h now · empty in 19.7h · 11.8h at peak 5%/h`, or
-  `5H idle · worst hour 0.7%/h → 5.8d if it resumes`, or `no usage in the last
+  `5H idle · worst hour 0.7%/h → 5.8d on resume`, or `no usage in the last
   24h`. At-risk cards are promoted above healthy ones; within a level the
   configured order is kept, so the page only moves when something changes state.
   Pay-as-you-go cards are ranked by the runway level they actually display, not

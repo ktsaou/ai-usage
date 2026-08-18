@@ -285,7 +285,7 @@ function burnLine(p){
     if(peak>rate&&r.peakHeadroomHours>0&&r.horizonHours&&r.peakHeadroomHours<r.horizonHours) t+=` · ${fmtHours(r.peakHeadroomHours)} at peak ${fmtRate(peak)}`;
     return `<div class="burn">${w}${t}</div>`;
   }
-  if(peak>0&&r.peakHeadroomHours>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> if it resumes</div>`;
+  if(peak>0&&r.peakHeadroomHours>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> on resume</div>`;
   if(peak>0) return `<div class="burn">${w}idle · <b class="${lvl}">spent</b></div>`;
   return `<div class="burn">${w}no usage in the last 24h</div>`;
 }
