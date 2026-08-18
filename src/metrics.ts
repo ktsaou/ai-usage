@@ -1,7 +1,7 @@
 import { DB } from "./db.js";
 import type { ProviderRisk, RiskLevel } from "./risk.js";
 
-const LEVEL_VALUE: Record<RiskLevel, number> = { ok: 0, warn: 1, crit: 2 };
+const LEVEL_VALUE: Record<RiskLevel, number> = { ok: 0, warn: 1, crit: 2, down: 3 };
 
 /**
  * Prometheus text format. `+Inf` is a valid gauge value and is used where a
@@ -30,7 +30,7 @@ export function renderMetrics(db: DB, riskFor?: (providerId: string) => Provider
   lines.push("# TYPE ai_usage_burn_ratio gauge");
   lines.push("# HELP ai_usage_headroom_hours Hours until this quota is exhausted at the current burn rate");
   lines.push("# TYPE ai_usage_headroom_hours gauge");
-  lines.push("# HELP ai_usage_risk_level Exhaustion risk: 0 ok, 1 elevated, 2 at risk");
+  lines.push("# HELP ai_usage_risk_level 0 ok, 1 elevated (peak rate would miss the deadline), 2 at risk (current rate misses it), 3 down (no usable reading or the plan is not valid)");
   lines.push("# TYPE ai_usage_risk_level gauge");
   lines.push("# HELP ai_usage_plan_seconds_remaining Seconds until the subscription itself ends");
   lines.push("# TYPE ai_usage_plan_seconds_remaining gauge");

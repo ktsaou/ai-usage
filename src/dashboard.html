@@ -148,7 +148,7 @@ header{
 .big-row{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:10px}
 .big-pct{font-family:var(--mono);font-weight:700;font-size:46px;line-height:.95;letter-spacing:-.03em}
 .big-pct .unit{font-size:19px;color:var(--muted);font-weight:600;margin-left:2px}
-.big-pct.ok{color:var(--ok)}.big-pct.warn{color:var(--warn)}.big-pct.crit{color:var(--crit)}
+.big-pct.ok{color:var(--ok)}.big-pct.warn{color:var(--warn)}.big-pct.crit{color:var(--crit)}.big-pct.down{color:var(--down)}
 .big-side{text-align:right}
 .big-used{font-family:var(--mono);font-size:12px;color:var(--text);font-weight:600}
 .big-total{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:2px}
@@ -157,6 +157,7 @@ header{
 .fill.ok{background:linear-gradient(90deg,#059669,#34d399)}
 .fill.warn{background:linear-gradient(90deg,#d97706,#fbbf24)}
 .fill.crit{background:linear-gradient(90deg,#dc2626,#f87171)}
+.fill.down{background:var(--down)}
 /* burn line: the pace, and what it leaves. A percentage alone hides this. */
 .burn{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin:-4px 0 11px;line-height:1.5}
 .burn .w{color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
@@ -263,7 +264,7 @@ function primaryMetric(metrics){
 // Burn figures come ready-made from /api/providers — the model lives in
 // src/risk.ts and is computed once per poll, not once per viewer.
 const RANK={crit:2,warn:1,ok:0};
-const riskWord=l=>l==='crit'?'at risk':l==='warn'?'watch':'ok';
+const riskWord=l=>l==='down'?'down':l==='crit'?'at risk':l==='warn'?'elevated':'ok';
 const fmtRate=r=>r>0&&r<0.05?'<0.1%/h':(r>=10?Math.round(r):Math.round(r*10)/10)+'%/h';
 // One duration format everywhere: a decimal '1.8h' next to a '1h 28m' countdown
 // made the reader convert one to compare them. fmtCountdown is that format.
@@ -290,13 +291,14 @@ function burnLine(p){
   return `<div class="burn">${w}no usage in the last 24h</div>`;
 }
 
-// The plan's own deadline. A subscription ending without auto-renewal takes
-// every quota on it, so it gets its own line rather than hiding in a tooltip.
-function planLine(p){
-  const s=p.risk&&p.risk.subscription; if(!s||!s.endsAt)return '';
-  const lvl=s.level||'ok';
-  const renew=s.autoRenew===true?'auto-renews':s.autoRenew===false?'auto-renewal off':'';
-  return `<div class="burn"><span class="w">Plan</span>period ends in <b class="${lvl}" data-reset="${s.endsAt}">${fmtCountdown(s.endsAt-Date.now())||'now'}</b>${renew?` · <b class="${s.autoRenew===false?lvl:''}">${renew}</b>`:''}${s.status&&s.status!=='VALID'?` · ${esc(s.status)}`:''}</div>`;
+// A subscription term ending is a renewal anniversary: on an auto-renewing plan
+// nothing happens there, so counting down to it was a countdown to a non-event.
+// A term that has gone past without the provider moving it on is another matter.
+function downReason(p){
+  const s=p.risk&&p.risk.subscription; if(!s)return '';
+  if(s.expired)return 'plan did not renew — its term ended and the provider has not moved the date on. The figures below are the last ones seen.';
+  if(s.status&&s.status!=='VALID')return `plan not valid — the provider reports status ${esc(s.status)}.`;
+  return '';
 }
 
 // At-risk cards first, otherwise configured order — the page stays put unless
@@ -397,7 +399,7 @@ function renderProviders(){
       // so nothing the colour used to say is lost.
       bigRow=`<div class="big-row"><div class="big-pct ${rlvl}">${bigVal}<span class="unit">${bigUnit}</span></div><div class="big-side">${side}</div></div>`;
       barHtml=pct!==null?`<div class="bar"><div class="fill ${rlvl}" style="width:${Math.min(pct,100)}%"></div></div>`:'';
-      barHtml+=burnLine(p)+planLine(p);
+      barHtml+=burnLine(p);
       chipHtml=`<span class="status-chip"><span class="dot ${rlvl}"></span>${riskWord(rlvl)}</span>`;
     }
     const planBadge=lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:(mode?`<span class="plan-badge">${mode}</span>`:'');
@@ -412,10 +414,11 @@ function renderProviders(){
       :prim&&prim.expiresAt
         ?`expires in <b data-reset="${prim.expiresAt}">${fmtCountdown(prim.expiresAt-Date.now())||'now'}</b>`
         :'<span style="color:var(--faint)">no reset window</span>';
-    return `<div class="card${settled}" style="--accent:${accent}">
+    const reason=rlvl==='down'?`<div class="err-msg">⚠ ${downReason(p)}</div>`:'';
+    return `<div class="card${rlvl==='down'?' down':''}${settled}" style="--accent:${accent}">
       <div class="card-top"><div class="pname"><span class="pdot"></span>${esc(p.name)}</div>
         <div style="display:flex;gap:8px;align-items:center">${planBadge}${chipHtml}</div></div>
-      ${bigRow}${barHtml}
+      ${reason}${bigRow}${barHtml}
       <div class="card-foot"><span class="reset"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${resetSpan}</span><span data-spark="${p.id}"></span></div>
       ${subHtml}</div>`;
   }).join('');

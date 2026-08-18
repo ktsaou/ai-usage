@@ -225,38 +225,38 @@ test("without the backstop the same spent window is the provider's problem", () 
   assert.equal(computeProviderRisk(history, result, NOW)!.level, "crit");
 });
 
-test("a plan ending soon without auto-renewal outranks healthy quotas", () => {
+test("a term that ran out without renewing takes the provider down", () => {
   const history = stubPerMetric({ weekly_quota: { percent: 10, short: 0, long: 0, peak: 0 } });
   const result: ProviderResult = {
     ...providerResult([quota(10, { name: "weekly_quota", window: "weekly" })]),
-    subscription: { endsAt: NOW + 30 * H, remainingDays: 1, autoRenew: false, status: "VALID" },
+    // two hours past the term, and the provider has not moved the date on
+    subscription: { endsAt: NOW - 2 * H, remainingDays: 0, autoRenew: null, status: "VALID" },
   };
   const risk = computeProviderRisk(history, result, NOW)!;
-  assert.equal(risk.level, "crit");
-  assert.equal(risk.binding!.level, "ok"); // the quota itself is fine
-  assert.equal(risk.subscription!.level, "crit");
+  assert.equal(risk.subscription!.expired, true);
+  assert.equal(risk.level, "down");
+  assert.equal(risk.binding!.level, "ok"); // the quota itself looks fine, and is meaningless
 });
 
-test("plan expiry levels follow the deadline, and auto-renewal clears them", () => {
-  const at = (h: number, autoRenew: boolean | null) =>
-    computeSubscriptionRisk({ endsAt: NOW + h * H, remainingDays: null, autoRenew, status: "VALID" }, NOW)!
-      .level;
-  assert.equal(at(30, false), "crit"); // inside 48h
-  assert.equal(at(72, false), "warn"); // inside a week
-  assert.equal(at(300, false), "ok");
-  assert.equal(at(30, true), "ok"); // it renews itself; the date is bookkeeping
-  // Unknown renewal says nothing. A vendor was found reporting a renewal flag
-  // that contradicted its own billing system, and treating unknown as "will not
-  // renew" announced that a renewing plan was about to lapse.
-  assert.equal(at(30, null), "ok");
+test("the renewal anniversary itself raises nothing, before or just after", () => {
+  const at = (h: number) =>
+    computeSubscriptionRisk({ endsAt: NOW + h * H, remainingDays: null, autoRenew: null, status: "VALID" }, NOW)!;
+  assert.equal(at(30).level, "ok"); // tomorrow: it just rolls over
+  assert.equal(at(0.5).level, "ok"); // half an hour away: still nothing
+  // A vendor updating the date lazily must not flash "did not renew" every month.
+  assert.equal(at(-0.5).level, "ok");
+  assert.equal(at(-0.5).expired, false);
+  assert.equal(at(-3).level, "down"); // three hours past and still not moved on
+  assert.equal(at(-3).expired, true);
 });
 
-test("a plan the provider itself calls invalid is critical whatever the dates say", () => {
+test("a plan the provider itself calls invalid is down whatever the dates say", () => {
   const r = computeSubscriptionRisk(
     { endsAt: NOW + 900 * H, remainingDays: 37, autoRenew: true, status: "EXPIRED" },
     NOW
   )!;
-  assert.equal(r.level, "crit");
+  assert.equal(r.level, "down");
+  assert.equal(r.expired, false); // not from the date — from what the vendor calls it
 });
 
 test("no subscription information yields none, not a reassuring default", () => {

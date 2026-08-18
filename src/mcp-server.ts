@@ -7,8 +7,8 @@ export interface McpBackend {
   queryProvider(id: string): Promise<any>;
 }
 
-const RANK: Record<string, number> = { ok: 0, warn: 1, crit: 2 };
-const LABEL: Record<string, string> = { ok: "ok", warn: "elevated", crit: "at risk" };
+const RANK: Record<string, number> = { ok: 0, warn: 1, crit: 2, down: 3 };
+const LABEL: Record<string, string> = { ok: "ok", warn: "elevated", crit: "at risk", down: "down" };
 
 function toRfc3339(ms: number | null | undefined): string | null {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return null;
@@ -16,29 +16,30 @@ function toRfc3339(ms: number | null | undefined): string | null {
 }
 
 /**
- * The plan's own deadline. Worth a line of its own: a plan that ends without
- * renewing takes every quota on it, however healthy those look.
+ * The subscription term. Stated at length on purpose: a bare "plan ends in 1d 7h"
+ * reads as an outage about to happen, and it is nothing of the sort — it is a
+ * renewal anniversary that an auto-renewing plan crosses without anything
+ * changing. A model told only the date will draw the wrong conclusion from it.
  */
 function planLine(risk: any): string | null {
   const s = risk?.subscription;
   if (!s || (!s.endsAt && !s.status)) return null;
-  const parts: string[] = [];
-  if (s.endsAt) {
-    const cd = countdown(s.endsAt - Date.now());
-    // The paid-through date, not a loss of access: with renewal on it rolls over
-    // into the next period. Whether it renews is not knowable here, so the
-    // wording states the period boundary and claims nothing beyond it.
-    parts.push(`current plan period ends ${toRfc3339(s.endsAt)} (in ${cd})`);
+
+  if (s.expired) {
+    const ago = countdown(Date.now() - s.endsAt);
+    return `PLAN DID NOT RENEW: its term ended ${toRfc3339(s.endsAt)}, ${ago} ago, and the provider has not moved the date on. Treat this plan as unusable — any quota figures below are the last ones seen and mean nothing now.`;
   }
-  if (s.autoRenew === true) parts.push("auto-renews");
-  else if (s.autoRenew === false) parts.push("auto-renewal OFF");
-  if (s.status && s.status !== "VALID") parts.push(`status ${s.status}`);
-  // The provider's level is the worse of its binding window and its plan. When
-  // the plan is the worse one, no quota line shows it, so say it here.
-  if (risk.binding && RANK[s.level] > RANK[risk.binding.level]) {
-    parts.push(`this puts the provider at ${LABEL[s.level] || s.level}`);
+  if (s.status && s.status !== "VALID") {
+    return `PLAN NOT VALID: the provider reports status ${s.status}. Treat this plan as unusable whatever the quota figures below say.`;
   }
-  return parts.join(" · ");
+  const parts = [
+    `subscription term ends ${toRfc3339(s.endsAt)} (in ${countdown(s.endsAt - Date.now())})`,
+    "this is a renewal anniversary, not a quota reset and not an expiry",
+  ];
+  if (s.autoRenew === true) parts.push("it auto-renews, so nothing changes then");
+  else if (s.autoRenew === false) parts.push("auto-renewal is off, so the plan stops then");
+  else parts.push("whether it auto-renews is not readable from this provider, so it may roll over silently or stop; if it stops, this line will say so afterwards");
+  return parts.join(" — ");
 }
 
 /** The one duration format, from a figure already measured in hours. */
@@ -116,6 +117,17 @@ export function countdown(ms: number): string {
   return `${sec}s`;
 }
 
+const LEGEND = [
+  "How to read this:",
+  "  ok        = at the current rate (last 60 minutes) this quota reaches its deadline.",
+  "  elevated  = the current rate reaches it, but the peak rate (busiest 60 minutes of the last 24h) would not.",
+  "  at risk   = at the current rate it does NOT reach its deadline, or it is already empty.",
+  "  down      = no usable reading, or the plan is no longer valid. Figures shown are stale.",
+  "  deadline  = the quota's own reset; for a pool covering a spent window, that window's reset.",
+  "  headroom  = time until exhausted at the current rate. burn ratio = deadline / headroom, so above 1 means it runs out first.",
+  "  a subscription term ending is a renewal anniversary, not a quota reset; it normally passes with nothing changing.",
+].join("\n");
+
 export function buildMcpServer(opts: { name: string; idHint: string; backend: McpBackend }): McpServer {
   const { name, idHint, backend } = opts;
   const server = new McpServer({ name, version: "1.0.0" });
@@ -142,11 +154,9 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         const plan = lf && !lf.error ? planLine(p.risk) : null;
         return `- ${p.id} (${p.name}): ${state}${detail}${plan ? `\n    ${plan}` : ""}`;
       });
-      const legend =
-        "burn ratio = current pace / the pace this quota can afford until its deadline (its reset, or for a pool covering a spent window, that window's reset); above 1 means it runs out first. headroom = time until exhausted at the current pace.";
       return {
         content: [
-          { type: "text", text: `# ${name} — monitored providers\n${lines.join("\n")}\n\n${legend}` },
+          { type: "text", text: `# ${name} — monitored providers\n${lines.join("\n")}\n\n${LEGEND}` },
         ],
       };
     }
@@ -217,7 +227,7 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
         content: [
           {
             type: "text",
-            text: `# ${name} — remaining usage\n${head}${plan ? `\n  ${plan}` : ""}\n${lines.join("\n") || "  (no metrics)"}`,
+            text: `# ${name} — remaining usage\n${head}${plan ? `\n  ${plan}` : ""}\n${lines.join("\n") || "  (no metrics)"}\n\n${LEGEND}`,
           },
         ],
       };

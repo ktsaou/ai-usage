@@ -29,14 +29,6 @@ const MIN_SPAN_MS = 10 * 60000;
 const ELEVATED_PERCENT = 70;
 const CRITICAL_PERCENT = 90;
 
-/**
- * A plan that ends soon and will not renew itself takes the quota with it, so it
- * is a risk of the same kind — but only when nobody has to act. With
- * auto-renewal on, the end date is an accounting detail.
- */
-const PLAN_EXPIRY_WARN_H = 7 * 24;
-const PLAN_EXPIRY_CRIT_H = 48;
-
 const WINDOW_MS: Record<string, number> = {
   "5h": 5 * H,
   daily: 24 * H,
@@ -44,7 +36,11 @@ const WINDOW_MS: Record<string, number> = {
   monthly: 30 * 24 * H,
 };
 
-export type RiskLevel = "ok" | "warn" | "crit";
+/**
+ * `down` is worse than `crit`: at risk means it will run out, down means there
+ * is nothing to run out of — the plan is not usable, or cannot be read at all.
+ */
+export type RiskLevel = "ok" | "warn" | "crit" | "down";
 
 export interface MetricRisk {
   level: RiskLevel;
@@ -71,6 +67,8 @@ export interface SubscriptionRisk {
   hoursLeft: number | null;
   autoRenew: boolean | null;
   status: string | null;
+  /** The term ran out and the provider has not moved it on: nothing renewed. */
+  expired: boolean;
 }
 
 export interface ProviderRisk {
@@ -95,7 +93,7 @@ export interface RiskHistory {
   peakHourlyRise(providerId: string, metricName: string, since: number): number | null;
 }
 
-const RANK: Record<RiskLevel, number> = { ok: 0, warn: 1, crit: 2 };
+const RANK: Record<RiskLevel, number> = { ok: 0, warn: 1, crit: 2, down: 3 };
 const worst = (a: RiskLevel, b: RiskLevel): RiskLevel => (RANK[b] > RANK[a] ? b : a);
 
 function fillLevel(percent: number): RiskLevel {
@@ -195,25 +193,38 @@ export function computeMetricRisk(
   };
 }
 
+/**
+ * The subscription term's end is a **renewal anniversary**, and on an
+ * auto-renewing plan nothing observable happens there: the term rolls over, the
+ * quotas keep their own schedules. Counting down to it says nothing, so nothing
+ * counts down to it any more.
+ *
+ * What does mean something is the date going **past** without the provider
+ * moving it on — a cancelled plan, or a payment that failed. Then the plan is
+ * gone, whatever the quota numbers still say, and that is `down`.
+ *
+ * The grace period is because vendors update this lazily: the term can sit a few
+ * minutes past its end before the renewed date appears, and a card must not
+ * flash "did not renew" at every anniversary.
+ */
+const RENEWAL_GRACE_H = 1;
+
 export function computeSubscriptionRisk(
   sub: SubscriptionInfo | null | undefined,
   now: number
 ): SubscriptionRisk | null {
   if (!sub) return null;
   const hoursLeft = sub.endsAt ? (sub.endsAt - now) / H : null;
-  let level: RiskLevel = "ok";
-  if (sub.status && sub.status !== "VALID") level = "crit";
-  // Only a confirmed "it will not renew" raises this. Unknown renewal used to
-  // count as "will not renew", on the reasoning that an end date is real either
-  // way — until a provider was found reporting a renewal flag that contradicted
-  // its own billing system, and the monitor announced that a renewing plan was
-  // about to lapse. A warning nobody can act on is worse than no warning, so an
-  // unknown renewal now says nothing.
-  else if (sub.autoRenew === false && hoursLeft !== null) {
-    if (hoursLeft <= PLAN_EXPIRY_CRIT_H) level = "crit";
-    else if (hoursLeft <= PLAN_EXPIRY_WARN_H) level = "warn";
-  }
-  return { level, endsAt: sub.endsAt, hoursLeft, autoRenew: sub.autoRenew, status: sub.status };
+  const expired = hoursLeft !== null && hoursLeft < -RENEWAL_GRACE_H;
+  const invalid = !!sub.status && sub.status !== "VALID";
+  return {
+    level: expired || invalid ? "down" : "ok",
+    endsAt: sub.endsAt,
+    hoursLeft,
+    autoRenew: sub.autoRenew,
+    status: sub.status,
+    expired,
+  };
 }
 
 /** How soon this metric becomes a problem, for picking the binding window. */

@@ -246,9 +246,11 @@ Level rules, in the terms they are meant to be read:
 - **elevated** (`warn`) — the current rate reaches it, but the **peak rate** (the
   worst sixty minutes of the last 24h) would not, measured all the way to the
   deadline.
-- **down** — no usable reading: the poll failed, or a session died. Neither ok
-  nor at risk, and claiming either would be a guess. Note this cannot be
-  distinguished from a plan that has genuinely ended; no provider tells us that.
+- **down** — no usable reading (the poll failed, a session died) **or** the plan
+  is not usable: its term passed without renewing, or the provider calls it
+  invalid. Worse than at risk: at risk means it will run out, down means there is
+  nothing to run out of. A failed poll still cannot be told apart from a plan
+  that vanished, but a term that lapsed now can be, and is.
 - **no rate measurable** — a quota nobody has touched for 24h, or the first
   minutes after a restart, has no pace to judge. Then and only then fullness
   decides: 70% elevated, 90% at risk. A nearly-empty quota must not look green
@@ -305,18 +307,24 @@ tag, plus a `collina` anti-bot fingerprint minted by the vendor's scripts. So
 `autoRenewFlag` is not read at all and `autoRenew` stays `null`. Do not restore
 it without new evidence.
 
-Levels:
+**The term's end is a renewal anniversary, not an event.** On an auto-renewing
+plan the term rolls over and nothing observable changes: quotas keep their own
+schedules. Counting down to it therefore says nothing, and no surface counts down
+to it any more — the dashboard card dropped the line entirely.
 
-- **crit** — `status` is anything other than `VALID`, or the plan ends within
-  48h and is **known** not to renew.
-- **warn** — it ends within 7 days and is **known** not to renew.
-- Auto-renewal **on** clears it: the end date is then bookkeeping.
-- Auto-renewal **unknown** says nothing. It used to count as "will not renew",
-  on the reasoning that the end date is real either way; that produced a
-  confident warning that a renewing plan was about to lapse. A warning nobody
-  can act on is worse than no warning.
-- Consequence, stated plainly: while no provider can report renewal, this risk
-  only ever fires on an invalid status. The end date is still shown everywhere.
+What means something is the date going **past** without the provider moving it
+on: a cancelled plan, or a payment that failed. Levels:
+
+- **down** — the term ended more than an hour ago and the date has not advanced,
+  or `status` is anything other than `VALID`. The plan is not usable and its
+  quota figures are stale, whatever they say.
+- **ok** — otherwise, including the day before the anniversary.
+- The one-hour grace exists because vendors update the field lazily; without it a
+  card would flash "did not renew" at every anniversary.
+
+Note the anniversary is not a quota reset either, though it can coincide with
+one: the coding plan's monthly quota resets at exactly its term boundary, while
+the token plan's weekly quota resets about 20 hours after its own.
 
 The provider's risk is the worse of its binding window and its plan. So a
 provider can read `at risk` while every quota on it is healthy; the dashboard's
@@ -345,9 +353,19 @@ removing the confirmation entirely was worse on every count (15 and 269).
 ## Cross-cutting rendering
 
 - **MCP percent metrics**: `N% used, M% remaining resets <RFC3339> (in <countdown>)`.
-- **MCP plan line**: both tools print `plan ends <RFC3339> (in <countdown>) ·
-  auto-renewal OFF` for providers that report a subscription, and `status X` when
-  the provider calls it anything but `VALID`.
+- **MCP plan line**: stated at length on purpose. A bare "plan ends in 1d 7h"
+  reads as an outage about to happen, and a model told only the date will draw
+  that conclusion — so the line says the term's end is "a renewal anniversary,
+  not a quota reset and not an expiry", and states whether renewal is known, off,
+  or (as today) not readable. When a term has lapsed it leads with
+  `PLAN DID NOT RENEW` and says the figures below mean nothing now.
+- **MCP legend**: every response from both tools ends with a short block defining
+  ok / elevated / at risk / down, deadline, headroom and burn ratio, and repeating
+  that a term ending is an anniversary. The output is read by models that have no
+  other way to learn what the words mean.
+- **Dashboard plan line**: removed. It counted down to a non-event — 27 days on
+  one card — and prompted the same question three times. A plan that did not
+  renew instead greys the card, shows the `down` chip and states the reason.
 - **Expiry vs reset**: a metric carrying `expiresAt` instead of `resetsAt` renders
   as `expires …` everywhere (MCP line, dashboard card foot, sub-row countdown).
   It is never counted as a reset — the "next quota reset" tile ignores it.
