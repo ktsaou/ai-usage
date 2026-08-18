@@ -309,3 +309,30 @@ test("with no window to cover, a pool has no deadline and says so", () => {
   assert.equal(addon.horizonHours, null);
   assert.equal(addon.burnRatio, null);
 });
+
+test("nearly full, but comfortably reaching its reset, is not elevated", () => {
+  // The kimi case: 84% used looks alarming and is not. 16% left at 1%/h is 16h
+  // of headroom against a reset 4.6h away, and even its worst recent hour makes
+  // it. Fullness must not override a pace that plainly arrives.
+  const m = quota(84, { window: "weekly", resetsAt: NOW + 4.6 * H });
+  const r = computeMetricRisk(stubHistory({ percent: 84, short: 1, long: 1, peak: 3 }), "p", m, NOW)!;
+  assert.equal(Math.round(r.headroomHours!), 16);
+  assert.ok(r.burnRatio! < 1);
+  assert.equal(r.level, "ok");
+});
+
+test("fullness still decides when there is no pace to judge by", () => {
+  const idle = stubHistory({ percent: 84, short: 0, long: 0, peak: 0 });
+  const m = quota(84, { window: "weekly", resetsAt: NOW + 4.6 * H });
+  assert.equal(computeMetricRisk(idle, "p", m, NOW)!.level, "warn");
+});
+
+test("a two-hour overshoot confirms critical without waiting for a six-hour average", () => {
+  // Measured on the live add-on pool: 1h 3.9%/h, 2h 2.0%/h, 6h 0.95%/h, against
+  // 1.05%/h affordable. The six-hour average lagged behind a burst that had been
+  // over budget for hours.
+  const m = quota(45, { window: null, resetsAt: null, coversUntil: NOW + 52 * H });
+  const r = computeMetricRisk(stubHistory({ percent: 45, short: 3.9, long: 2.0, peak: 10 }), "p", m, NOW)!;
+  assert.ok(r.burnRatio! > 1);
+  assert.equal(r.level, "crit");
+});

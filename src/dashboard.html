@@ -296,7 +296,7 @@ function planLine(p){
   const s=p.risk&&p.risk.subscription; if(!s||!s.endsAt)return '';
   const lvl=s.level||'ok';
   const renew=s.autoRenew===true?'auto-renews':s.autoRenew===false?'auto-renewal off':'';
-  return `<div class="burn"><span class="w">Plan</span>ends in <b class="${lvl}" data-reset="${s.endsAt}">${fmtCountdown(s.endsAt-Date.now())||'now'}</b>${renew?` · <b class="${s.autoRenew===false?lvl:''}">${renew}</b>`:''}${s.status&&s.status!=='VALID'?` · ${esc(s.status)}`:''}</div>`;
+  return `<div class="burn"><span class="w">Plan</span>period ends in <b class="${lvl}" data-reset="${s.endsAt}">${fmtCountdown(s.endsAt-Date.now())||'now'}</b>${renew?` · <b class="${s.autoRenew===false?lvl:''}">${renew}</b>`:''}${s.status&&s.status!=='VALID'?` · ${esc(s.status)}`:''}</div>`;
 }
 
 // At-risk cards first, otherwise configured order — the page stays put unless

@@ -25,7 +25,10 @@ function planLine(risk: any): string | null {
   const parts: string[] = [];
   if (s.endsAt) {
     const cd = countdown(s.endsAt - Date.now());
-    parts.push(`plan ends ${toRfc3339(s.endsAt)} (in ${cd})`);
+    // The paid-through date, not a loss of access: with renewal on it rolls over
+    // into the next period. Whether it renews is not knowable here, so the
+    // wording states the period boundary and claims nothing beyond it.
+    parts.push(`current plan period ends ${toRfc3339(s.endsAt)} (in ${cd})`);
   }
   if (s.autoRenew === true) parts.push("auto-renews");
   else if (s.autoRenew === false) parts.push("auto-renewal OFF");

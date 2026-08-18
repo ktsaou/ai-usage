@@ -241,7 +241,7 @@ across providers whatever the provider counts in:
 Level rules:
 
 - **crit** — the quota is exhausted, or the rate over the last hour *and* over a
-  confirming longer lookback (`min(6h, max(75m, windowLength/4))`) both exceed
+  confirming longer lookback (`min(2h, max(75m, windowLength/4))`) both exceed
   what the quota can afford until its deadline — the reset for an ordinary
   window, one window length for a rolling one, and the covered window's reset
   for a pool that backstops a spent one. Both lookbacks must agree: one busy
@@ -250,8 +250,13 @@ Level rules:
   `min(horizonHours, 12h)`. The 12h cap is what makes the peak test meaningful:
   projecting a busy hour across a whole month flags everything, and the question
   being answered is "does this survive tonight".
-- The level **never reports better than the raw fill level** (70% elevated, 90%
-  critical). An almost-full quota that happens to be idle is not "ok".
+- **Fullness is a fallback, not a floor.** The 70%/90% fill levels decide only
+  when the pace cannot be judged — no deadline, or neither a current nor a peak
+  rate to measure. A quota at 84% burning 1%/h, with 16h of headroom against a
+  reset 4.6h away, is `ok`: it plainly arrives. Treating fullness as a floor
+  marked it elevated, which is the same misreading of a percentage the model
+  exists to replace. With no rate and no peak, fullness is all there is, and an
+  almost-full idle quota is still not "ok".
 
 Anchors are always constrained to one window instance (`resets_at`), because a
 pair spanning a reset reads the drop to zero as a rate. A rolling window has no
@@ -266,7 +271,15 @@ place rather than inventing a reassuring one.
 ## Subscription facts
 
 A plan that ends takes every quota on it, however healthy those look, so the
-plan's own lifetime is part of the risk. Providers that know it report
+plan's own lifetime is part of the risk.
+
+`endsAt` is the **paid-through date** — the end of the current subscription
+period, from `endTime` / `instanceEndTime` — not a date on which access is
+necessarily lost. A plan with renewal on rolls over into the next period at that
+moment. Since renewal is not knowable (above), surfaces say "current plan period
+ends" rather than "plan ends", which claimed more than the data supports. It is
+also not a quota reset: the quota windows run on their own schedule and can reset
+after it. Providers that know it report
 `subscription` on their result — `endsAt`, `remainingDays`, `autoRenew`,
 `status` — which is descriptive, passed through, and never stored. Today both
 Alibaba providers report `endTime` / `instanceEndTime`, `remainingDays` and
@@ -311,6 +324,14 @@ every surface is therefore conditional ("at this pace"), never a prediction.
 The parameters (1h short lookback, the confirming lookback above, 24h peak
 window, 12h planning horizon) were chosen by that backtest. Changing them
 without re-running it is guesswork.
+
+The confirming lookback was capped at 6h until a re-run showed the cap was the
+wrong shape: a quota with no declared window fell back to a 7-day default and so
+received the *longest* smoothing, and a pool that had been over budget for hours
+still read `ok` because its six-hour average had not caught up. At a 2h cap the
+rule warns before all three real exhaustions with the same 13 false-alarm windows
+out of 251 (duty 7.00% against 6.25%, 225 red/green transitions against 183);
+removing the confirmation entirely was worse on every count (15 and 269).
 
 ## Cross-cutting rendering
 
