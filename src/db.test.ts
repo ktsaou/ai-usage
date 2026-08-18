@@ -91,18 +91,28 @@ test("a rolling window is one continuous instance", () => {
   });
 });
 
-test("the peak hour is the largest rise inside one hour, ignoring the reset drop", () => {
+test("the peak is the worst sixty minutes, even across an hour boundary", () => {
   withDb((db) => {
-    const first = NOW + 4 * H;
-    const hour = (n: number) => NOW - n * H;
-    sample(db, hour(5), 0, first);
-    sample(db, hour(5) + 60000, 4, first); // +4 in that hour
-    sample(db, hour(4), 10, first);
-    sample(db, hour(4) + 60000, 40, first); // +30 in that hour
-    sample(db, hour(3), 90, first);
-    sample(db, hour(3) + 60000, 1, NOW + 9 * H); // reset: 90 -> 1, not a rise
+    const reset = NOW + 4 * H;
+    // 40% consumed between :45 and :15 of the next hour. Bucketing by clock hour
+    // would call this two 20% halves; it is one 40% hour.
+    const onTheHour = NOW - (NOW % H) - 2 * H;
+    for (let i = 0; i <= 90; i++) {
+      const consumed = i < 45 ? 0 : i < 75 ? ((i - 45) * 40) / 30 : 40;
+      sample(db, onTheHour + i * 60000, consumed, reset);
+    }
+    assert.equal(Math.round(db.peakHourlyRise("p", "5h_quota", NOW - 24 * H)!), 40);
+  });
+});
 
-    assert.equal(db.peakHourlyRise("p", "5h_quota", NOW - 24 * H), 30);
+test("the peak never counts the drop at a reset as consumption", () => {
+  withDb((db) => {
+    const first = NOW + 1 * H;
+    sample(db, NOW - 3 * H, 10, first);
+    sample(db, NOW - 2 * H, 95, first); // 85 in an hour, the real peak
+    sample(db, NOW - 1 * H, 2, NOW + 6 * H); // reset: 95 -> 2 is not a rise
+    sample(db, NOW - 30 * 60000, 5, NOW + 6 * H);
+    assert.equal(Math.round(db.peakHourlyRise("p", "5h_quota", NOW - 24 * H)!), 85);
   });
 });
 
@@ -115,6 +125,7 @@ test("the peak hour ignores samples older than the requested start", () => {
     sample(db, NOW - 1 * H + 60000, 63, reset);
 
     assert.equal(db.peakHourlyRise("p", "5h_quota", NOW - 24 * H), 3);
+    assert.equal(db.peakHourlyRise("p", "5h_quota", NOW - 40 * H), 50);
   });
 });
 

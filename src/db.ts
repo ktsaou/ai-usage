@@ -183,22 +183,31 @@ export class DB {
   }
 
   /**
-   * The largest rise this metric made inside any single clock hour since
-   * `since` — how hard this quota gets hit when it is being used at all, which
-   * a rate measured over the last hour cannot show while nobody is working.
+   * The most this metric was consumed in any **sixty minutes** since `since` —
+   * how hard the quota gets hit when it is being used at all, which a rate
+   * measured over the last hour cannot show while nobody is working.
    *
-   * Buckets are grouped by window instance too, so the drop at a reset is never
-   * read as a rise. A burst split across an hour boundary is measured as its two
-   * halves, which understates it; that is the accepted cost of doing this in one
-   * indexed aggregate rather than a sliding scan.
+   * The window slides. Bucketing by clock hour instead is one cheap aggregate,
+   * but it splits a burst that straddles a boundary into two halves: a real
+   * 40%/h burst from 10:45 to 11:15 was reported as 20%/h, understating the
+   * figure the elevated level is decided by, by half.
+   *
+   * `PARTITION BY resets_at` keeps a window from spanning a reset, where the
+   * drop to zero would otherwise read as the trough of a huge rise. Measuring
+   * from the lowest point in the trailing hour rather than from the sample an
+   * hour ago also does the right thing for a rolling window, whose used figure
+   * falls as old usage ages out.
    */
   peakHourlyRise(providerId: string, metricName: string, since: number): number | null {
     const row = this.db
       .prepare(
         `SELECT MAX(d) AS peak FROM (
-           SELECT MAX(percent) - MIN(percent) AS d FROM measurements
-            WHERE provider_id = ? AND metric_name = ? AND percent IS NOT NULL AND fetched_at >= ?
-            GROUP BY fetched_at / 3600000, resets_at)`
+           SELECT percent - MIN(percent) OVER (
+                    PARTITION BY resets_at ORDER BY fetched_at
+                    RANGE BETWEEN 3600000 PRECEDING AND CURRENT ROW
+                  ) AS d
+             FROM measurements
+            WHERE provider_id = ? AND metric_name = ? AND percent IS NOT NULL AND fetched_at >= ?)`
       )
       .get(providerId, metricName, since) as { peak: number | null } | undefined;
     return row?.peak ?? null;

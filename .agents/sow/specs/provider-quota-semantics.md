@@ -230,7 +230,7 @@ across providers whatever the provider counts in:
 | Field | Meaning |
 |---|---|
 | `ratePerHour` | consumption over the last hour |
-| `peakRatePerHour` | the largest rise inside any single clock hour of the last 24 |
+| `peakRatePerHour` | the most consumed in any sixty minutes of the last 24h, sliding |
 | `headroomHours` | hours until exhausted at `ratePerHour`; `null` when nothing is burning |
 | `peakHeadroomHours` | the same at `peakRatePerHour` — what a resumed burst costs |
 | `horizonHours` | hours until the reset; for a rolling window, one window length |
@@ -257,6 +257,21 @@ Level rules:
   marked it elevated, which is the same misreading of a percentage the model
   exists to replace. With no rate and no peak, fullness is all there is, and an
   almost-full idle quota is still not "ok".
+
+`ratePerHour` is measured over the last 60 minutes — the newest sample against
+the newest at or before an hour earlier. Early in a window, before an hour of
+history exists, it is measured over whatever there is (at least 10 minutes) and
+still expressed per hour; the alternative is no signal at all just after a reset.
+
+`peakRatePerHour` slides: the most consumed in **any** sixty minutes, not the
+most inside a clock hour. Clock buckets are one cheap aggregate but split a burst
+that straddles a boundary — a real 40%/h burst from 10:45 to 11:15 was reported
+as 20%/h — and, being `MAX - MIN`, they were direction-blind: one provider reset
+its weekly quota from 66% to 0% without changing its published reset timestamp,
+and that drop was counted as a 66%/h burn that kept the card elevated for a day.
+The sliding form measures the rise from the lowest point in the trailing hour
+forward, so a fall contributes nothing. At production scale (1.55M rows) it costs
+1.35ms per metric against 0.53ms, paid once per poll.
 
 Anchors are always constrained to one window instance (`resets_at`), because a
 pair spanning a reset reads the drop to zero as a rate. A rolling window has no
