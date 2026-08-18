@@ -133,7 +133,7 @@ export function buildMcpServer(opts: { name: string; idHint: string; backend: Mc
           : !lf
             ? "pending"
             : lf.error
-              ? `ERROR ${lf.error}`
+              ? `DOWN — no reading: ${lf.error}`
               : `${lf.metrics.length} metrics${lf.plan ? " · plan " + lf.plan : ""}${p.payg ? " · payg:" + p.payg : ""}`;
         // The binding window's burn figures: the provider's risk is whichever
         // of its windows runs out first, so that is the one worth listing.

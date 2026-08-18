@@ -364,9 +364,12 @@ function renderProviders(){
     }
     if(!lf){ return `<div class="card${settled}" style="--accent:${accent}"><div class="card-top"><div class="pname"><span class="pdot"></span>${esc(p.name)}</div></div><div class="empty">waiting for first poll…</div></div>`; }
     if(lf.error){ crit++;
+      // No reading at all: neither ok nor at risk, and saying either would be a
+      // guess. The error text is the whole story.
       return `<div class="card down${settled}" style="--accent:${accent}">
         <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span>${esc(p.name)}</div>
-        ${lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:''}</div>
+        <div style="display:flex;gap:8px;align-items:center">${lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:''}
+        <span class="status-chip"><span class="dot down"></span>down</span></div></div>
         <div class="err-msg">⚠ ${esc(lf.error)}</div></div>`;
     }
     live++;

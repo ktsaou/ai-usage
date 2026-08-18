@@ -65,10 +65,13 @@ test("a pace that beats the reset is critical, and states when it runs out", () 
   assert.ok(r.burnRatio! > 1);
 });
 
-test("a single busy hour does not trip critical without the longer lookback agreeing", () => {
+test("the last 60 minutes alone decides critical — no waiting for a second opinion", () => {
+  // A confirming longer lookback was tried and dropped by decision: it delayed
+  // red by up to an hour to avoid a few red/green switches a day.
   const m = quota(30, { window: "5h", resetsAt: NOW + 4 * H });
   const r = computeMetricRisk(stubHistory({ percent: 30, short: 40, long: 1, peak: 0 }), "p", m, NOW)!;
-  assert.equal(r.level, "ok");
+  assert.equal(r.level, "crit");
+  assert.ok(r.burnRatio! > 1);
 });
 
 test("idle, but the worst recent hour would end it — elevated, with what a resumed burst costs", () => {
@@ -79,10 +82,21 @@ test("idle, but the worst recent hour would end it — elevated, with what a res
   assert.equal(r.peakHeadroomHours, 2);
 });
 
-test("a busy hour projected across a monthly window does not raise an alarm", () => {
+test("elevated asks whether the worst hour survives to the reset, however far off", () => {
+  // 80% left at a peak of 1%/h is 80h of cover against a reset 500h away, so the
+  // worst hour does not make it. A 12h cap on this test was tried and dropped by
+  // decision; without it, long windows spend much more of their time elevated.
   const m = quota(20, { window: "monthly", resetsAt: NOW + 500 * H });
   const r = computeMetricRisk(stubHistory({ percent: 20, short: 0, long: 0, peak: 1 }), "p", m, NOW)!;
-  assert.equal(r.level, "ok"); // 80h of headroom is beyond any planning horizon
+  assert.equal(r.level, "warn");
+  assert.equal(r.peakHeadroomHours, 80);
+});
+
+test("but a worst hour that does reach the reset is not elevated", () => {
+  const m = quota(20, { window: "5h", resetsAt: NOW + 4 * H });
+  const r = computeMetricRisk(stubHistory({ percent: 20, short: 0, long: 0, peak: 10 }), "p", m, NOW)!;
+  assert.equal(r.peakHeadroomHours, 8); // 8h of cover for a 4h gap
+  assert.equal(r.level, "ok");
 });
 
 test("a rolling window is judged against its own length, not a reset", () => {
@@ -327,7 +341,7 @@ test("fullness still decides when there is no pace to judge by", () => {
   assert.equal(computeMetricRisk(idle, "p", m, NOW)!.level, "warn");
 });
 
-test("a two-hour overshoot confirms critical without waiting for a six-hour average", () => {
+test("a pool over budget on the last hour is critical straight away", () => {
   // Measured on the live add-on pool: 1h 3.9%/h, 2h 2.0%/h, 6h 0.95%/h, against
   // 1.05%/h affordable. The six-hour average lagged behind a burst that had been
   // over budget for hours.

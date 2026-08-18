@@ -22,28 +22,6 @@ const SHORT_LOOKBACK_MS = 1 * H;
 /** How far back the peak-hour rate looks. */
 const PEAK_WINDOW_MS = 24 * H;
 
-/**
- * The peak rate is a planning figure, not a forecast: the honest question it
- * answers is "if the team works like its worst recent hour, does this survive
- * the night". Projecting a peak hour across a whole month never survives
- * contact with reality, so the test is capped here.
- */
-const PLANNING_HORIZON_H = 12;
-
-/**
- * The longest the confirming lookback may be. It was 6h, which a quota with no
- * declared window reached by default — so the pool with the *shortest* useful
- * signal got the *longest* smoothing, and a burst that had been over budget for
- * hours still read as ok because the six-hour average had not caught up.
- *
- * Backtested over 14 days of this deployment's history: at 2h the rule still
- * warns before all three real exhaustions, with the same 13 false-alarm windows
- * out of 251 as at 6h (duty 7.00% against 6.25%, 225 red/green transitions
- * against 183). Dropping the confirmation altogether was worse on every count —
- * 15 false-alarm windows and 269 transitions.
- */
-const CONFIRM_CAP_MS = 2 * H;
-
 /** Below this the two samples are too close together for their difference to mean anything. */
 const MIN_SPAN_MS = 10 * 60000;
 
@@ -130,16 +108,6 @@ function windowMs(metric: UsageMetric): number | null {
   return metric.window ? WINDOW_MS[metric.window] ?? null : null;
 }
 
-/**
- * The confirming lookback. A single short measurement flips to critical on one
- * busy minute and back on the next; requiring a longer one to agree is what
- * makes the level stable enough to leave on a screen.
- */
-function longLookbackMs(metric: UsageMetric): number {
-  const w = windowMs(metric) ?? 7 * 24 * H;
-  return Math.min(CONFIRM_CAP_MS, Math.max(75 * 60000, w / 4));
-}
-
 /** Percent of the quota per hour between two samples, or null if they are too close. */
 function rateFrom(anchors: MetricAnchors | null): number | null {
   if (!anchors) return null;
@@ -180,7 +148,6 @@ export function computeMetricRisk(
   const horizonHours = horizonMs !== null && horizonMs > 0 ? horizonMs / H : null;
 
   const short = rateFrom(history.metricAnchors(providerId, metric.name, SHORT_LOOKBACK_MS));
-  const long = rateFrom(history.metricAnchors(providerId, metric.name, longLookbackMs(metric)));
   const peakRise = history.peakHourlyRise(providerId, metric.name, now - PEAK_WINDOW_MS);
 
   const ratePerHour = short !== null ? Math.max(0, short) : null;
@@ -203,19 +170,15 @@ export function computeMetricRisk(
   let level: RiskLevel = judgeable ? "ok" : fillLevel(metric.percent);
   if (remaining <= 0) {
     level = "crit";
-  } else if (
-    sustainable !== null &&
-    short !== null &&
-    long !== null &&
-    short > sustainable &&
-    long > sustainable
-  ) {
+  } else if (sustainable !== null && short !== null && short > sustainable) {
+    // At the current rate it does not reach its deadline. Measured over the last
+    // 60 minutes only: a confirming longer lookback was tried and dropped by
+    // decision, because it delayed red by up to an hour to avoid a few red/green
+    // switches a day (15 false-alarm windows out of 251 against 13, 269
+    // switches against 225, over 14 days of stored history).
     level = "crit";
-  } else if (
-    horizonHours !== null &&
-    peakHeadroomHours !== null &&
-    peakHeadroomHours < Math.min(horizonHours, PLANNING_HORIZON_H)
-  ) {
+  } else if (horizonHours !== null && peakHeadroomHours !== null && peakHeadroomHours < horizonHours) {
+    // The current rate arrives, but the worst hour of the last 24 would not.
     level = worst(level, "warn");
   }
 

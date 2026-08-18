@@ -238,40 +238,34 @@ across providers whatever the provider counts in:
 | `rolling` | this window decays instead of resetting |
 | `level` | `ok` / `warn` / `crit` |
 
-Level rules:
+Level rules, in the terms they are meant to be read:
 
-- **crit** — the quota is exhausted, or the rate over the last hour *and* over a
-  confirming longer lookback (`min(2h, max(75m, windowLength/4))`) both exceed
-  what the quota can afford until its deadline — the reset for an ordinary
-  window, one window length for a rolling one, and the covered window's reset
-  for a pool that backstops a spent one. Both lookbacks must agree: one busy
-  minute otherwise flips a card to red and back, on a page meant to stay open.
-- **warn** — the peak hour would exhaust the quota within
-  `min(horizonHours, 12h)`. The 12h cap is what makes the peak test meaningful:
-  projecting a busy hour across a whole month flags everything, and the question
-  being answered is "does this survive tonight".
-- **Fullness is a fallback, not a floor.** The 70%/90% fill levels decide only
-  when the pace cannot be judged — no deadline, or neither a current nor a peak
-  rate to measure. A quota at 84% burning 1%/h, with 16h of headroom against a
-  reset 4.6h away, is `ok`: it plainly arrives. Treating fullness as a floor
-  marked it elevated, which is the same misreading of a percentage the model
-  exists to replace. With no rate and no peak, fullness is all there is, and an
-  almost-full idle quota is still not "ok".
+- **at risk** (`crit`) — at the **current rate** (the last 60 minutes) it does
+  not reach its deadline, or it is already empty. Equivalently `burnRatio > 1`,
+  since the burn ratio is the deadline divided by the headroom.
+- **elevated** (`warn`) — the current rate reaches it, but the **peak rate** (the
+  worst sixty minutes of the last 24h) would not, measured all the way to the
+  deadline.
+- **down** — no usable reading: the poll failed, or a session died. Neither ok
+  nor at risk, and claiming either would be a guess. Note this cannot be
+  distinguished from a plan that has genuinely ended; no provider tells us that.
+- **no rate measurable** — a quota nobody has touched for 24h, or the first
+  minutes after a restart, has no pace to judge. Then and only then fullness
+  decides: 70% elevated, 90% at risk. A nearly-empty quota must not look green
+  merely because nobody used it recently.
 
-`ratePerHour` is measured over the last 60 minutes — the newest sample against
-the newest at or before an hour earlier. Early in a window, before an hour of
-history exists, it is measured over whatever there is (at least 10 minutes) and
-still expressed per hour; the alternative is no signal at all just after a reset.
+Two rules that were tried and dropped **by decision**, recorded so they are not
+reintroduced as improvements:
 
-`peakRatePerHour` slides: the most consumed in **any** sixty minutes, not the
-most inside a clock hour. Clock buckets are one cheap aggregate but split a burst
-that straddles a boundary — a real 40%/h burst from 10:45 to 11:15 was reported
-as 20%/h — and, being `MAX - MIN`, they were direction-blind: one provider reset
-its weekly quota from 66% to 0% without changing its published reset timestamp,
-and that drop was counted as a 66%/h burn that kept the card elevated for a day.
-The sliding form measures the rise from the lowest point in the trailing hour
-forward, so a fall contributes nothing. At production scale (1.55M rows) it costs
-1.35ms per metric against 0.53ms, paid once per poll.
+- A *confirming* longer lookback for at-risk, so red needed the pace to hold for
+  two hours. Measured over 14 days it was steadier — 13 false-alarm windows out
+  of 251 against 15, and 225 red/green switches against 269 — but it delayed red
+  by up to an hour, and the user chose the earlier warning.
+- A 12h cap on the elevated test, so it asked "would the worst hour empty this
+  before tonight" rather than "before the reset". The cap kept long windows quiet
+  (weekly and monthly cards elevated 10-17% of the time instead of 35-50%); the
+  user chose the literal reading, so those cards are amber far more often and
+  that is intended, not noise.
 
 Anchors are always constrained to one window instance (`resets_at`), because a
 pair spanning a reset reads the drop to zero as a rate. A rolling window has no
