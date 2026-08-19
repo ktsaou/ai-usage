@@ -135,3 +135,31 @@ test("no history yields no anchors and no peak", () => {
     assert.equal(db.peakHourlyRise("p", "5h_quota", NOW - 24 * H), null);
   });
 });
+
+test("the chart series is oldest-first and no longer than asked", () => {
+  withDb((db) => {
+    const reset = NOW + 4 * H;
+    for (let i = 0; i < 200; i++) sample(db, NOW - (200 - i) * 60000, i, reset);
+
+    const pts = db.sparkline("p", "5h_quota", "percent", 121);
+    assert.equal(pts.length, 121, "the card asks for 121 samples: 120 one-minute intervals");
+    assert.deepEqual(pts, [...pts].sort((a, b) => a - b), "oldest first, so the newest minute is the right-hand edge");
+    assert.equal(pts.at(-1), 199, "the last point is the newest sample");
+  });
+});
+
+test("the chart series keeps the drop at a reset, for the consumer to clamp", () => {
+  withDb((db) => {
+    // The dashboard derives per-minute consumption as the difference between
+    // adjacent points and clamps negatives away, because a reset is not usage.
+    // That only works if the series still carries the drop, unsmoothed.
+    sample(db, NOW - 3 * 60000, 90, NOW - 2 * 60000);
+    sample(db, NOW - 2 * 60000, 2, NOW + 5 * H);
+    sample(db, NOW - 1 * 60000, 5, NOW + 5 * H);
+
+    const pts = db.sparkline("p", "5h_quota", "percent", 121);
+    assert.deepEqual(pts, [90, 2, 5]);
+    const used = pts.slice(1).map((v, i) => Math.max(0, v - pts[i]));
+    assert.deepEqual(used, [0, 3], "the reset minute consumed nothing; the next consumed 3");
+  });
+});

@@ -450,21 +450,50 @@ removing the confirmation entirely was worse on every count (15 and 269).
   within the hour. Rows whose metric has no reset time (lifetime balances, or a
   window the API reports without one) leave the column blank; the headline says
   `no reset window` explicitly. Countdowns are tagged `data-reset` and updated
-  by the page's one-second ticker.
-- **Dashboard history**: the page shows a 40-sample sparkline per card and the
-  pay-as-you-go runway/spend figures. There are no time-series charts. Both
-  inputs come from `GET /api/summary`, which applies the same primary-metric
-  rule server-side and returns, per provider: the last 40 values of that metric
-  (`percent`, or `total`/`used` for balance/spend providers) and the two
-  samples the burn rate is measured between — the newest, and the newest at or
-  before `spendWindowDays` earlier, falling back to the oldest sample with
-  `sinceFirst: true` when history is shorter than the window. Providers whose
-  last poll failed are omitted, so the page keeps showing their previous values.
-- **Serving size**: a dashboard refresh is `/api/providers` + `/api/summary`,
-  ~2.0 KB gzipped in total over six subscription providers (1.4 KB + 0.6 KB;
-  the risk fields are about eight numbers per metric and grew the refresh by
-  roughly 0.9 KB). `GET /api/history/:id?days=N` still returns raw samples for
-  manual export; nothing polls it.
+  by the page's one-second ticker. **Every countdown names its window.** The
+  headline's countdown belongs to the primary metric while the burn line
+  describes the binding one, and those differ often enough that an unlabelled
+  time reads as belonging to whichever window was named just above it. When the
+  two differ the burn line also carries its own reset, so neither borrows the
+  other's.
+- **Dashboard history**: each card carries one chart covering the last 120
+  minutes, drawing two views of the same window on one axis — the level as a
+  line, and what each individual minute consumed as bars beneath it. The bars
+  exist because a level and an averaged rate cannot distinguish a quota being
+  consumed right now from one consumed an hour ago: a card reading "51% used,
+  80%/h" is the same picture either way, and the right-hand edge of the bars is
+  the only thing that answers it.
+  - The line is drawn against a fixed 0-100 for percentage series, so cards are
+    comparable and a quota that crept 0.002% does not draw the same cliff as one
+    that burned half its allowance. Balances and spend have no ceiling and
+    auto-scale to their own range.
+  - The bars are the first difference of the same points, clamped at zero: a
+    negative step is a window reset or a top-up, not consumption. For balance
+    providers the value falls as it is consumed, so the difference is inverted.
+    Bar height is relative to that provider's own busiest minute in the window,
+    so bars show *when*, not how much, and heights are not comparable between
+    cards; the burn line above carries the magnitude.
+  - The charted window is the one the risk model finds binding, so the chart and
+    the burn line immediately above it always describe the same quota.
+    Pay-as-you-go providers have no binding window and fall back to the primary
+    metric.
+  - Both inputs come from `GET /api/summary`, which returns, per provider: the
+    last 121 values of the charted metric (`percent`, or `total`/`used` for
+    balance/spend providers) rounded to 4 decimals, and the two samples the
+    pay-as-you-go burn rate is measured between — the newest, and the newest at
+    or before `spendWindowDays` earlier, falling back to the oldest sample with
+    `sinceFirst: true` when history is shorter than the window. Providers whose
+    last poll failed are omitted, so the page keeps showing their previous
+    values.
+- **Serving size**: a dashboard refresh is `/api/providers` + `/api/summary`.
+  `/api/summary` is ~1.0 KB gzipped over eight providers. The 121-point series
+  costs +92 bytes gzipped against the 40-point sparkline it replaced, because
+  the per-minute bars are derived in the page from the same points rather than
+  sent as a second array, and the values are rounded before serialising —
+  unrounded, one provider's 15-significant-digit percentages alone cost more
+  than the entire rest of the response (1594 vs 992 bytes gzipped).
+  `GET /api/history/:id?days=N` still returns raw samples for manual export;
+  nothing polls it.
 - **Serving cached readings**: the scheduler keeps the last *successful* result
   and a consecutive-failure count. `/api/providers` carries `state`, `error` and
   `failures` alongside the figures, so every renderer agrees on whether they are

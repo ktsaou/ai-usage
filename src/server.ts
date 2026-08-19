@@ -65,8 +65,13 @@ export function buildProvidersPayload(config: AppConfig, scheduler: Scheduler) {
   return { service: config.service || {}, providers };
 }
 
-/** How many samples a card's sparkline draws. */
-const SPARK_POINTS = 40;
+/**
+ * How many samples a card's chart draws. Polls land every 60s, so 121 samples
+ * span 120 one-minute intervals — the window the card's consumption bars cover.
+ * One more than the number of bars, because each bar is the difference between
+ * two adjacent samples.
+ */
+const SPARK_POINTS = 121;
 
 /**
  * The most exhausted window, ignoring quotas that measure something else and
@@ -104,10 +109,19 @@ export function buildSummaryPayload(config: AppConfig, db: DB, scheduler: Schedu
     const prim = primaryMetric(last.metrics);
     if (!prim) continue;
     const value = valueColumn(p);
+    // The chart sits directly under the burn line, which describes the binding
+    // window. Charting the headline window instead would put a graph of one
+    // quota under a sentence about another. Pay-as-you-go providers have no
+    // binding window, so they keep the headline metric.
+    const charted = scheduler.getRisk(p.id)?.metric ?? prim.name;
     providers.push({
       id: p.id,
-      metric: prim.name,
-      spark: db.sparkline(p.id, prim.name, value, SPARK_POINTS),
+      metric: charted,
+      // Rounded because full float precision is charted on a 46px strip and
+      // nothing can see it: one provider reports percentages to 15 significant
+      // digits, and serialising them unrounded costs more than the rest of this
+      // response put together, every minute, for every open tab.
+      spark: db.sparkline(p.id, charted, value, SPARK_POINTS).map((v) => Math.round(v * 1e4) / 1e4),
       payg: p.payg
         ? db.paygAnchors(p.id, prim.name, value, (p.spendWindowDays || 7) * 24 * 3600 * 1000)
         : null,

@@ -55,6 +55,8 @@ Per-provider field semantics (metric names, units, windows, reset-time source, u
 
 A metric may carry `note`, `breakdown`, `secondary`, `rolling`, `backstopped`, `expiresAt` and `coversUntil`, and a result may carry `subscription` — descriptive fields set by the provider module, passed through the API, and never stored. `secondary` means "this measures something other than the plan's usage"; `backstopped` means "this window is spent but another pool covers it, so it is not the constraint". Neither may headline a card or drive the provider's risk. Only the fetcher knows either, so renderers must never special-case a metric name to decide it. Card headline selection lives in `primaryMetric()` in both `src/server.ts` and `src/dashboard.html` (the dashboard has no build step and cannot import) — change both together.
 
+A card shows more than one window, and two independent rules pick which one leads: `primaryMetric()` picks the fullest for the big number, and `computeProviderRisk()` picks whichever runs out first for the verdict, the burn line and the chart. **They disagree regularly** — two of seven providers in one live reading. So every time on a card must name the window it belongs to. It did not once: the footer countdown was unlabelled, so when the two rules disagreed the burn line's window name sat directly above a countdown belonging to a different window, and that window then appeared again below with a second, different countdown. The user reported it as the same quota being shown twice. Nothing in the stored data was wrong; the page produced it. Anything added to a card that names a window or shows a time must carry both, or neither.
+
 A vendor's APIs can contradict each other, and the one you can reach may be the wrong one. Alibaba's `autoRenewFlag` disagreed with its own billing system about whether a plan renews, and the monitor confidently told the user a renewing plan was about to lapse. Before reporting a fact that a user will act on, check it against what their console displays; where they disagree and the authoritative source is unreachable, report nothing rather than the reachable guess.
 
 Every quota is judged against a deadline — the burn rate means nothing on its own. Most have one (their reset); a rolling window uses its own length; a pool that backstops a spent window borrows the reset of the window it covers (`coversUntil`), because that is the moment it has to reach. A quota with no deadline at all can never be reported as at risk however fast it drains, so when adding one, say what its deadline is.
@@ -114,11 +116,22 @@ again every minute, per viewer.
   between are queried with `LIMIT`, not filtered client-side from a full dump.
   A rewrite that sends rows and lets the page pick will not be noticed in
   testing — it costs nothing on a LAN and saturates the link in production.
+- **Serialise at the precision the pixel can show.** One provider reports
+  percentages to 15 significant digits. Sending the card's series unrounded cost
+  more than the entire rest of the response — rounding to 4 decimals took
+  `/api/summary` from 1594 to 992 bytes gzipped and changed nothing on screen.
+- **Each card's chart carries one series, and the second is derived from it.**
+  The bars are per-minute consumption, which is exactly the first difference of
+  the level line; sending both would ship the same information twice and let the
+  two disagree. Deriving is not a licence to send raw rows and reduce in the
+  page — the series itself is still `LIMIT`-queried and pre-reduced in `db.ts`.
 - Responses are gzipped (`compress()` in `src/server.ts`). It is a safety net
   for the remaining endpoints, not a substitute for sending less.
-- Charts were removed rather than downsampled: the user judged them not worth
-  their cost. Do not reintroduce a view that needs a time series without
-  agreeing the serving cost first.
+- Charts were removed once, then one came back deliberately: a bounded 120-point
+  strip per card, agreed with the user, costing +92 bytes gzipped per refresh
+  over the whole payload. That budget is what made it acceptable. Do not
+  reintroduce a view that needs a time series without agreeing its cost first,
+  and do not grow this one without measuring again.
 - Samples older than `retentionDays` (config, default 90) are deleted daily.
   A poll every minute writes ~18k rows/day; without pruning the database grows
   ~1.1 GB/year. No VACUUM: freed pages are reused, so the file settles.

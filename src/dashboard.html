@@ -168,15 +168,21 @@ header{
 .fill.down{background:var(--down)}
 /* burn line: the pace, and what it leaves. A percentage alone hides this. */
 .burn{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin:-4px 0 11px;line-height:1.5}
-.burn .w{color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
+.burn .w,.reset .w{color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-right:6px}
 .burn b{font-weight:600;color:var(--text)}
 .burn b.warn{color:var(--warn)}.burn b.crit{color:var(--crit)}
 .card-foot{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .reset{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .reset svg{width:12px;height:12px;opacity:.7}
 .reset b{color:var(--text);font-weight:600}
-.spark{width:110px;height:30px;flex:none}
-.spark polyline{fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+/* Level over the last 120 minutes, and what each of those minutes consumed.
+   No transition or animation anywhere here: the chart is rebuilt once per data
+   refresh, and anything that animates repaints this strip 60x a second forever
+   on a dashboard that is meant to stay open. */
+.trend{margin-top:10px;height:46px;line-height:0}
+.trend svg{display:block;width:100%;height:46px}
+.trend polyline{fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.trend .axis{stroke:var(--border);stroke-width:1}
 /* secondary metric rows */
 .sub-metrics{margin-top:12px;border-top:1px dashed var(--border);padding-top:10px;display:flex;flex-direction:column;gap:7px}
 .sub-m{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px}
@@ -253,7 +259,7 @@ const paygMode = p => p.payg || null;
 
 let providersData = [];
 let nextReset = null;
-let cache = {};          // id -> { sparkSVG, payg }
+let cache = {};          // id -> { trend, payg }
 let serviceMeta = {};    // { name, tagline }
 let firstBuildDone = false;
 
@@ -282,10 +288,16 @@ function fmtHours(h){ return (h===null||h===undefined||!isFinite(h))?'–':fmtCo
 // What the card is really telling you: at this pace, how long does it last.
 // Named windows, because the window that runs out first is often not the one
 // headlining the card.
-function burnLine(p){
+function burnLine(p,prim){
   const r=p.risk&&p.risk.binding; if(!r)return '';
   const lvl=p.risk.level, rate=r.ratePerHour, peak=r.peakRatePerHour;
   const w=`<span class="w">${pretty(p.risk.metric).replace(/ Quota$/,'')}</span>`;
+  // This line describes the window that runs out first, which is not always the
+  // one the card headlines. When they differ the footer's countdown belongs to
+  // the other window, so carry our own rather than borrow one that reads as ours.
+  const bm=prim&&p.risk.metric!==prim.name?(p.lastFetch.metrics||[]).find(m=>m.name===p.risk.metric):null;
+  const dl=bm?(bm.resetsAt||bm.expiresAt):null;
+  const own=dl?` · ${bm.resetsAt?'resets':'expires'} in <b data-reset="${dl}">${fmtCountdown(dl-Date.now())||'now'}</b>`:'';
   if(rate>0){
     const left=r.headroomHours>0?`empty in <b class="${lvl}">${fmtHours(r.headroomHours)}</b>`:`<b class="${lvl}">spent</b>`;
     let t=`<b class="${lvl}">${fmtRate(rate)}</b> now · ${left}`;
@@ -293,11 +305,11 @@ function burnLine(p){
     // The comparison that decides it: what it has left against what it must cover.
     if(r.bridging&&r.horizonHours) t+=` · needs <b class="${lvl}">${fmtHours(r.horizonHours)}</b>`;
     if(peak>rate&&r.peakHeadroomHours>0&&r.horizonHours&&r.peakHeadroomHours<r.horizonHours) t+=` · ${fmtHours(r.peakHeadroomHours)} at peak ${fmtRate(peak)}`;
-    return `<div class="burn">${w}${t}</div>`;
+    return `<div class="burn">${w}${t}${own}</div>`;
   }
-  if(peak>0&&r.peakHeadroomHours>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> on resume</div>`;
-  if(peak>0) return `<div class="burn">${w}idle · <b class="${lvl}">spent</b></div>`;
-  return `<div class="burn">${w}no usage in the last 24h</div>`;
+  if(peak>0&&r.peakHeadroomHours>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> on resume${own}</div>`;
+  if(peak>0) return `<div class="burn">${w}idle · <b class="${lvl}">spent</b>${own}</div>`;
+  return `<div class="burn">${w}no usage in the last 24h${own}</div>`;
 }
 
 // A subscription term ending is a renewal anniversary: on an auto-renewing plan
@@ -325,7 +337,47 @@ function cardRank(p){
   return p.risk?RANK[p.risk.level]:0;
 }
 
-function sparkSVG(points,color){ if(!points||points.length<2)return ''; const w=110,h=30,mn=Math.min(...points),mx=Math.max(...points),span=(mx-mn)||1,step=w/(points.length-1); const pts=points.map((p,i)=>`${(i*step).toFixed(1)},${(h-3-((p-mn)/span)*(h-6)).toFixed(1)}`).join(' '); return `<svg class="spark" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" stroke="${color}" opacity="0.85"/></svg>`; }
+// One chart, two views of the same window, on one 120-minute axis: the level as
+// a line, and what each individual minute consumed as bars beneath it.
+//
+// The level alone cannot answer the question the card exists to answer. A card
+// reading "51% used, 80%/h" is the same picture whether the burn stopped ten
+// minutes ago or is still running, and an averaged rate cannot tell them apart.
+// The bars can: if the right-hand edge is full, it is happening now.
+//
+// The bars are the first difference of the very same points the line is drawn
+// from, so no second series is fetched and the two can never contradict each
+// other. A negative step is a window reset or a top-up, not consumption, so it
+// is clamped away. `falling` covers balances, which go down as they are used.
+// `absolute` means the series is a percentage of its quota, so the line is drawn
+// against a fixed 0-100. Auto-scaling to the series' own range instead makes a
+// monthly quota that crept 0.002% in two hours draw the same cliff as one that
+// burned half its allowance, and at this size that reads as alarm. Balances and
+// spend have no natural ceiling and keep the auto-scale.
+function trendSVG(points,color,falling,absolute){
+  if(!points||points.length<2)return '';
+  const w=300,h=46,lh=26,bh=17,gap=3;
+  const mn=absolute?0:Math.min(...points),mx=absolute?100:Math.max(...points),span=(mx-mn)||1,step=w/(points.length-1);
+  const line=points.map((p,i)=>`${(i*step).toFixed(2)},${(lh-2-((p-mn)/span)*(lh-4)).toFixed(2)}`).join(' ');
+  const use=[];let peak=0;
+  for(let i=1;i<points.length;i++){const d=falling?points[i-1]-points[i]:points[i]-points[i-1];const v=d>0?d:0;use.push(v);if(v>peak)peak=v;}
+  const bw=w/use.length;
+  // Bar height is relative to this provider's own busiest minute in the window,
+  // so the bars answer *when* consumption happened, not how much — heights are
+  // not comparable between cards, and the burn line above carries the magnitude.
+  // Scaling them against anything absolute would flatten a slow quota that is
+  // genuinely being consumed into a strip that reads as idle, which is the one
+  // reading this chart exists to prevent.
+  // A minute that consumed anything gets at least a visible stub, so a slow
+  // quota moving one integer point an hour still reads as "active", not "idle".
+  const bars=peak>0?use.map((v,i)=>{if(v<=0)return '';const bar=Math.max(1.6,(v/peak)*bh);
+    return `<rect x="${(i*bw).toFixed(2)}" y="${(bh-bar).toFixed(2)}" width="${Math.max(bw*0.8,0.6).toFixed(2)}" height="${bar.toFixed(2)}" fill="${color}" opacity="0.62"/>`;}).join(''):'';
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img">`
+    +`<title>Level and per-minute consumption, last ${use.length} minutes</title>`
+    +`<polyline points="${line}" stroke="${color}" opacity="0.9" vector-effect="non-scaling-stroke"/>`
+    +`<g transform="translate(0,${lh+gap})">${bars}`
+    +`<line class="axis" x1="0" y1="${bh}" x2="${w}" y2="${bh}" vector-effect="non-scaling-stroke"/></g></svg>`;
+}
 
 // `anchors` is {last,base,sinceFirst} from /api/summary — the two samples the
 // burn rate is measured between, picked server-side so the page never has to
@@ -350,7 +402,7 @@ function computePayg(p, anchors){
 
 function injectCached(){
   for(const [id,c] of Object.entries(cache)){
-    const sp=document.querySelector(`[data-spark="${id}"]`); if(sp) sp.innerHTML=c.sparkSVG||'';
+    const sp=document.querySelector(`[data-trend="${id}"]`); if(sp) sp.innerHTML=c.trend||'';
     const pg=c.payg;
     const big=document.querySelector(`[data-pg-big="${id}"]`);
     const side=document.querySelector(`[data-pg-side="${id}"]`);
@@ -410,7 +462,7 @@ function renderProviders(){
       // so nothing the colour used to say is lost.
       bigRow=`<div class="big-row"><div class="big-pct ${rlvl}">${bigVal}<span class="unit">${bigUnit}</span></div><div class="big-side">${side}</div></div>`;
       barHtml=pct!==null?`<div class="bar"><div class="fill ${rlvl}" style="width:${Math.min(pct,100)}%"></div></div>`:'';
-      barHtml+=burnLine(p);
+      barHtml+=burnLine(p,prim);
       chipHtml=`<span class="status-chip ${rlvl}"><span class="dot ${rlvl}"></span>${riskWord(rlvl)}</span>`;
     }
     const planBadge=lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:(mode?`<span class="plan-badge">${mode}</span>`:'');
@@ -420,10 +472,15 @@ function renderProviders(){
     const subs=lf.metrics.filter(m=>m!==prim);
     const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=m.risk?m.risk.level:levelOf(sp);const dl=m.resetsAt||m.expiresAt;const rst=dl?`<b data-reset="${dl}">${fmtCountdown(dl-Date.now())||'now'}</b>`:'';return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span><span class="rst">${rst}</span></div>`;}).join('')}</div>`:'';
     // Some allowances expire rather than reset — nothing comes back afterwards.
+    // Name the window this countdown belongs to. It used to be the only time on
+    // the card with no owner, so when the burn line above it described a
+    // different window the two read as one statement, and that window then
+    // appeared again below with a different countdown.
+    const wname=prim&&prim.window?`<span class="w">${esc(prim.window)}</span>`:'';
     const resetSpan=prim&&prim.resetsAt
-      ?`resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`
+      ?`${wname}resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`
       :prim&&prim.expiresAt
-        ?`expires in <b data-reset="${prim.expiresAt}">${fmtCountdown(prim.expiresAt-Date.now())||'now'}</b>`
+        ?`${wname}expires in <b data-reset="${prim.expiresAt}">${fmtCountdown(prim.expiresAt-Date.now())||'now'}</b>`
         :'<span style="color:var(--faint)">no reset window</span>';
     const reason=rlvl==='down'?`<div class="err-msg">⚠ ${downReason(p)}</div>`
       // One failed poll: the numbers stand, with their age and what went wrong.
@@ -432,7 +489,8 @@ function renderProviders(){
       <div class="card-top"><div class="pname"><span class="pdot"></span><b>${esc(p.name)}</b></div>
         <div style="display:flex;gap:8px;align-items:center">${planBadge}${chipHtml}</div></div>
       ${reason}${bigRow}${barHtml}
-      <div class="card-foot"><span class="reset"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${resetSpan}</span><span data-spark="${p.id}"></span></div>
+      <div class="trend" data-trend="${p.id}"></div>
+      <div class="card-foot"><span class="reset"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${resetSpan}</span></div>
       ${subHtml}</div>`;
   }).join('');
   el.innerHTML=html;
@@ -464,7 +522,7 @@ async function loadSummary(){
       const p=providersData.find(x=>x.id===s.id); if(!p)continue;
       const prev=cache[s.id];
       cache[s.id]={
-        sparkSVG: s.spark&&s.spark.length>=2 ? sparkSVG(s.spark,colorFor(s.id)) : (prev?prev.sparkSVG:''),
+        trend: s.spark&&s.spark.length>=2 ? trendSVG(s.spark,colorFor(s.id),p.payg==='balance',!p.payg) : (prev?prev.trend:''),
         payg: computePayg(p,s.payg)
       };
     }
