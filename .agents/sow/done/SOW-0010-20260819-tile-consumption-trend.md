@@ -4,7 +4,7 @@
 
 Status: completed
 
-Sub-state: implemented, deployed, verified live.
+Sub-state: regression repaired - see the appended regression section.
 
 ## Requirements
 
@@ -282,3 +282,67 @@ None. All items are mapped in Validation > Follow-up mapping as implemented or r
 None yet.
 
 Append regression entries here only after this SOW was completed or closed and later testing or use found broken behavior. Use a dated `## Regression - YYYY-MM-DD` heading at the end of the file. Never prepend regression content above the original SOW narrative.
+
+
+## Regression - 2026-08-19
+
+### What broke
+
+Decision 4 of this SOW chose to label every countdown with its window (option B1) rather than stop repeating a window that the burn line already describes (option B2). That did not resolve the report it was chosen for. The user returned with a screenshot of the same card and the words "weekly twice again":
+
+```
+Kimi Coding   STANDARD   AT RISK
+34%   34 used   of 100 % · 5h
+WEEKLY 1%/h now · empty in 3d 6h · 5h 55m at peak 13%/h · resets in 6d 1h
+[chart]
+5H  resets in 2h 48m
+WEEKLY QUOTA   23%   6d 1h
+```
+
+Both countdowns are now correctly attributed and agree - the labelling worked. But the weekly window is still described by two separate rows: the burn line, and a sub-row. The complaint was never that a time was ambiguous; it was that one quota occupies two rows on a card.
+
+### Evidence
+
+- The card above, from the deployed build: `WEEKLY ... resets in 6d 1h` and `WEEKLY QUOTA 23% 6d 1h`.
+- The card's structure is set by two rules: the big number, bar, footer countdown and chart follow `primaryMetric()` (the fullest window), while the chip, colour and burn line follow `computeProviderRisk()` (the window that runs out first). Sub-rows are `metrics.filter(m => m !== prim)`, so whenever the two rules disagree the binding window is not `prim` and is therefore also listed below.
+
+### Why the previous validation missed it
+
+This SOW validated the property it had chosen to implement - that every countdown names its window - and confirmed it on the one live card where the rules disagreed. It never checked the property the user had actually asked for, which is that a window appears once. The acceptance criteria were written from the chosen remedy rather than from the report, so they could pass while the reported symptom survived.
+
+The framing error was recorded as a lesson at the time ("when a user rejects a remedy without choosing from the options offered, the framing is what they are rejecting") and then repeated: option B2 existed, was described accurately, and was not taken.
+
+### Repair
+
+The card is now one headline window plus one row per other window, with each window appearing exactly once.
+
+- `headlineMetric()` in `src/dashboard.html` picks the binding window, falling back to `primaryMetric()` only for pay-as-you-go providers, which have no risk model. The big number, bar, burn line, chart, footer countdown and chip therefore all describe the same quota, and because sub-rows are still "every metric except the headline", the binding window can no longer appear twice.
+- The burn line names that window; the big-number caption no longer repeats it, and the footer countdown drops the label added earlier in this SOW - with one window per block there is nothing left to disambiguate. The burn line is the place that names it because it can name a metric with no `window` field at all, such as Alibaba's add-on credits, which the caption cannot.
+- `buildSummaryPayload()` in `src/server.ts` already charted the binding window, so the chart and the headline now agree by construction; its comment is corrected to say so.
+
+This reverses the headline rule settled as decision 3A in SOW-0007 ("keep the headline rule, add a risk badge"). That decision predates the evidence that the two rules disagree routinely - two of seven providers in one live reading - and the duplication it produces has now been reported twice.
+
+### Validation
+
+- Headless render of every card against a captured snapshot. Each window appears exactly once on every card:
+  - Kimi: headline `5h` block, sub-row `WEEKLY QUOTA 22% 6d 1h`.
+  - Alibaba Coding: headline `MONTHLY` block, sub-rows `5H QUOTA 0%` and `WEEKLY QUOTA 1% 4d 4h`.
+  - Alibaba Token: headline `ADDON CREDITS` block, sub-row `WEEKLY QUOTA 100% 1d 1h`.
+  - Z.AI: headline `5H` block, sub-row `MONTHLY MCP 0% 15d 2h`.
+  - MiMo, MiniMax: single window, headline block only.
+  - DeepSeek, OpenRouter: no risk model, headline falls back to the fullest metric and the caption still names it.
+- `npm test` - 43 pass. `npx tsc --noEmit` - clean.
+- Deployed; service active, all providers `state=ok`; live render confirms the same structure.
+- Same-failure scan: `nextReset` scans all metrics independently of the headline and is unaffected; `primaryMetric()` survives in both files as the pay-as-you-go fallback and its comments in `src/server.ts` and `src/dashboard.html` are corrected to say so.
+
+### Artifact updates
+
+- AGENTS.md: the paragraph added by this SOW is replaced. It described labelling as the remedy; it now states the invariant - a card is one headline window plus one row per other window, each appearing exactly once - and records that labelling was tried first and was not enough, so the next reader does not repeat it.
+- Specs: `provider-quota-semantics.md` - "Per-window reset" and the chart's charted-window note updated to the unified rule.
+- No API, schema, metrics or MCP change.
+
+### Lesson
+
+Acceptance criteria must be written from the report, not from the chosen remedy. "Every countdown names its window" was testable, was tested, and passed, while "the same quota is not shown twice" - the thing actually reported - was never expressed as a criterion and survived two rounds of work.
+
+Naming something more precisely does not fix a layout that is structurally about two things at once. When one object is described in two places because two rules disagree about which object leads, the fix is to make one rule.

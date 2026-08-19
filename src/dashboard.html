@@ -279,7 +279,20 @@ let firstBuildDone = false;
 // The most exhausted window, ignoring quotas flagged `secondary` (they measure
 // something other than plan usage, like z.ai's tool calls) and `backstopped`
 // ones (spent, but another pool covers them, so they are not the constraint).
+// Only the fallback for a card with no risk model — see headlineMetric().
 // Mirrors primaryMetric() in src/server.ts; keep the two in step.
+// A card is one headline window plus one row per other window, and each window
+// must appear exactly once. The headline is therefore the window the risk model
+// finds binding — the one the verdict, the burn line and the chart all describe.
+// Headlining the fullest window instead split the card across two: the binding
+// window was not the headline, so it appeared a second time as a sub-row with
+// its own countdown, and the same quota was listed twice. Pay-as-you-go
+// providers have no binding window and keep the fullest.
+function headlineMetric(p,metrics){
+  const b=p.risk&&p.risk.metric;
+  return (b&&metrics.find(m=>m.name===b))||primaryMetric(metrics);
+}
+
 function primaryMetric(metrics){
   if(!metrics||!metrics.length)return null;
   const eligible=metrics.filter(m=>!m.secondary&&!m.backstopped);
@@ -301,16 +314,10 @@ function fmtHours(h){ return (h===null||h===undefined||!isFinite(h))?'–':fmtCo
 // What the card is really telling you: at this pace, how long does it last.
 // Named windows, because the window that runs out first is often not the one
 // headlining the card.
-function burnLine(p,prim){
+function burnLine(p){
   const r=p.risk&&p.risk.binding; if(!r)return '';
   const lvl=p.risk.level, rate=r.ratePerHour, peak=r.peakRatePerHour;
   const w=`<span class="w">${pretty(p.risk.metric).replace(/ Quota$/,'')}</span>`;
-  // This line describes the window that runs out first, which is not always the
-  // one the card headlines. When they differ the footer's countdown belongs to
-  // the other window, so carry our own rather than borrow one that reads as ours.
-  const bm=prim&&p.risk.metric!==prim.name?(p.lastFetch.metrics||[]).find(m=>m.name===p.risk.metric):null;
-  const dl=bm?(bm.resetsAt||bm.expiresAt):null;
-  const own=dl?` · ${bm.resetsAt?'resets':'expires'} in <b data-reset="${dl}">${fmtCountdown(dl-Date.now())||'now'}</b>`:'';
   if(rate>0){
     const left=r.headroomHours>0?`empty in <b class="${lvl}">${fmtHours(r.headroomHours)}</b>`:`<b class="${lvl}">spent</b>`;
     let t=`<b class="${lvl}">${fmtRate(rate)}</b> now · ${left}`;
@@ -318,11 +325,11 @@ function burnLine(p,prim){
     // The comparison that decides it: what it has left against what it must cover.
     if(r.bridging&&r.horizonHours) t+=` · needs <b class="${lvl}">${fmtHours(r.horizonHours)}</b>`;
     if(peak>rate&&r.peakHeadroomHours>0&&r.horizonHours&&r.peakHeadroomHours<r.horizonHours) t+=` · ${fmtHours(r.peakHeadroomHours)} at peak ${fmtRate(peak)}`;
-    return `<div class="burn">${w}${t}${own}</div>`;
+    return `<div class="burn">${w}${t}</div>`;
   }
-  if(peak>0&&r.peakHeadroomHours>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> on resume${own}</div>`;
-  if(peak>0) return `<div class="burn">${w}idle · <b class="${lvl}">spent</b>${own}</div>`;
-  return `<div class="burn">${w}no usage in the last 24h${own}</div>`;
+  if(peak>0&&r.peakHeadroomHours>0) return `<div class="burn">${w}idle · worst hour ${fmtRate(peak)} → <b class="${lvl}">${fmtHours(r.peakHeadroomHours)}</b> on resume</div>`;
+  if(peak>0) return `<div class="burn">${w}idle · <b class="${lvl}">spent</b></div>`;
+  return `<div class="burn">${w}no usage in the last 24h</div>`;
 }
 
 // A subscription term ending is a renewal anniversary: on an auto-renewing plan
@@ -459,7 +466,7 @@ function renderProviders(){
         <div class="err-msg">⚠ ${esc(lf.error)}</div></div>`;
     }
     live++;
-    const prim=primaryMetric(lf.metrics); const mode=paygMode(p);
+    const prim=headlineMetric(p,lf.metrics); const mode=paygMode(p);
     let lvl,pct;
     if(mode){ lvl='ok'; pct=null; } else { pct=prim&&prim.percent!==null?prim.percent:null; lvl=pct===null?'ok':levelOf(pct); }
     // The card's status is the risk of the window that runs out first, which
@@ -477,13 +484,16 @@ function renderProviders(){
     } else {
       const bigVal=pct===null?fmtNum(prim?prim.total:null):(pct<10?pct.toFixed(1):Math.round(pct));
       const bigUnit=pct===null?(prim?prim.unit:''):'%';
-      const side=prim&&prim.used!==null?`<div class="big-used">${fmtNum(prim.used)} used</div><div class="big-total">of ${fmtNum(prim.total)} ${prim.unit}${prim.window?' · '+prim.window:''}</div>`:`<div class="big-used">available</div><div class="big-total">${prim?prim.unit:''}${prim&&prim.window?' · '+prim.window:' · balance'}</div>`;
+      // Named once per card: the burn line below carries the window, and it can
+      // name a metric that has no `window` at all, which this caption cannot.
+      const wcap=(p.risk&&p.risk.binding)?'':(prim.window?' · '+prim.window:'');
+      const side=prim&&prim.used!==null?`<div class="big-used">${fmtNum(prim.used)} used</div><div class="big-total">of ${fmtNum(prim.total)} ${prim.unit}${wcap}</div>`:`<div class="big-used">available</div><div class="big-total">${prim?prim.unit:''}${prim&&prim.window?' · '+prim.window:' · balance'}</div>`;
       // Coloured by risk, not by how full it is: a green 41% beside an "at risk"
       // chip is read as green. The risk never reads better than the fill level,
       // so nothing the colour used to say is lost.
       bigRow=`<div class="big-row"><div class="big-pct ${rlvl}">${bigVal}<span class="unit">${bigUnit}</span></div><div class="big-side">${side}</div></div>`;
       barHtml=pct!==null?`<div class="bar"><div class="fill ${rlvl}" style="width:${Math.min(pct,100)}%"></div></div>`:'';
-      barHtml+=burnLine(p,prim);
+      barHtml+=burnLine(p);
       chipHtml=`<span class="status-chip ${rlvl}"><span class="dot ${rlvl}"></span>${riskWord(rlvl)}</span>`;
     }
     const planBadge=lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:(mode?`<span class="plan-badge">${mode}</span>`:'');
@@ -493,15 +503,12 @@ function renderProviders(){
     const subs=lf.metrics.filter(m=>m!==prim);
     const subHtml=subs.length?`<div class="sub-metrics">${subs.map(m=>{const hasPct=m.percent!==null;const sp=hasPct?m.percent:0;const sl=m.risk?m.risk.level:levelOf(sp);const dl=m.resetsAt||m.expiresAt;const rst=dl?`<b data-reset="${dl}">${fmtCountdown(dl-Date.now())||'now'}</b>`:'';return `<div class="sub-m"><span class="lbl">${pretty(m.name)}</span>${hasPct?`<span class="mini-bar"><i class="fill ${sl}" style="width:${Math.min(sp,100)}%"></i></span>`:`<span class="mini-bar" style="background:transparent"></span>`}<span class="val">${hasPct?sp.toFixed(0)+'%':fmtNum(m.total)}</span><span class="rst">${rst}</span></div>`;}).join('')}</div>`:'';
     // Some allowances expire rather than reset — nothing comes back afterwards.
-    // Name the window this countdown belongs to. It used to be the only time on
-    // the card with no owner, so when the burn line above it described a
-    // different window the two read as one statement, and that window then
-    // appeared again below with a different countdown.
-    const wname=prim&&prim.window?`<span class="w">${esc(prim.window)}</span>`:'';
+    // No label: this countdown belongs to the headline window, which is the
+    // only window this block describes, and the burn line above has named it.
     const resetSpan=prim&&prim.resetsAt
-      ?`${wname}resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`
+      ?`resets in <b data-reset="${prim.resetsAt}">${fmtCountdown(prim.resetsAt-Date.now())||'now'}</b>`
       :prim&&prim.expiresAt
-        ?`${wname}expires in <b data-reset="${prim.expiresAt}">${fmtCountdown(prim.expiresAt-Date.now())||'now'}</b>`
+        ?`expires in <b data-reset="${prim.expiresAt}">${fmtCountdown(prim.expiresAt-Date.now())||'now'}</b>`
         :'<span style="color:var(--faint)">no reset window</span>';
     const reason=rlvl==='down'?`<div class="err-msg">⚠ ${downReason(p)}</div>`
       // One failed poll: the numbers stand, with their age and what went wrong.

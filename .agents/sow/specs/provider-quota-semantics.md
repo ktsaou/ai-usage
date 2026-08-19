@@ -450,12 +450,14 @@ removing the confirmation entirely was worse on every count (15 and 269).
   within the hour. Rows whose metric has no reset time (lifetime balances, or a
   window the API reports without one) leave the column blank; the headline says
   `no reset window` explicitly. Countdowns are tagged `data-reset` and updated
-  by the page's one-second ticker. **Every countdown names its window.** The
-  headline's countdown belongs to the primary metric while the burn line
-  describes the binding one, and those differ often enough that an unlabelled
-  time reads as belonging to whichever window was named just above it. When the
-  two differ the burn line also carries its own reset, so neither borrows the
-  other's.
+  by the page's one-second ticker. **A card is one headline window plus one row
+  per other window, and each window appears exactly once.** The headline is the
+  binding window - the same one the chip, the burn line, the chart and the
+  footer countdown describe - so the whole top block is one statement about one
+  quota, and every remaining window gets exactly one sub-row. The burn line is
+  where the headline window is named, because it can name a metric that has no
+  `window` field at all; the caption above it and the footer countdown below do
+  not repeat it.
 - **Dashboard history**: each card carries one chart covering the last 120
   minutes, drawing two views of the same window on one axis — the level as a
   line, and what each individual minute consumed as bars beneath it. The bars
@@ -473,10 +475,10 @@ removing the confirmation entirely was worse on every count (15 and 269).
     Bar height is relative to that provider's own busiest minute in the window,
     so bars show *when*, not how much, and heights are not comparable between
     cards; the burn line above carries the magnitude.
-  - The charted window is the one the risk model finds binding, so the chart and
-    the burn line immediately above it always describe the same quota.
-    Pay-as-you-go providers have no binding window and fall back to the primary
-    metric.
+  - The charted window is the one the risk model finds binding, which is also
+    the card's headline, so the chart, the burn line above it and the big number
+    all describe the same quota. Pay-as-you-go providers have no binding window
+    and fall back to the fullest metric.
   - Both inputs come from `GET /api/summary`, which returns, per provider: the
     last 121 values of the charted metric (`percent`, or `total`/`used` for
     balance/spend providers) rounded to 4 decimals, and the two samples the

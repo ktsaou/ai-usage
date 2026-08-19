@@ -75,10 +75,11 @@ const SPARK_POINTS = 121;
 
 /**
  * The most exhausted window, ignoring quotas that measure something else and
- * ones that are spent but covered by another pool — the same rule the dashboard
- * uses to pick a card's headline metric. Duplicated there because the dashboard
- * is a single static file with no build step and cannot import from here; keep
- * the two in step.
+ * ones that are spent but covered by another pool. Cards headline the *binding*
+ * window; this is the fallback for providers that have no risk model at all
+ * (pay-as-you-go), and what their spend anchors are measured on. Duplicated in
+ * the dashboard because it is a single static file with no build step and
+ * cannot import from here; keep the two in step.
  */
 function primaryMetric(metrics: UsageMetric[]): UsageMetric | null {
   if (!metrics?.length) return null;
@@ -109,10 +110,10 @@ export function buildSummaryPayload(config: AppConfig, db: DB, scheduler: Schedu
     const prim = primaryMetric(last.metrics);
     if (!prim) continue;
     const value = valueColumn(p);
-    // The chart sits directly under the burn line, which describes the binding
-    // window. Charting the headline window instead would put a graph of one
-    // quota under a sentence about another. Pay-as-you-go providers have no
-    // binding window, so they keep the headline metric.
+    // The binding window, which is also the one the card headlines and the burn
+    // line describes — the chart belongs to that block and must not graph a
+    // different quota from the sentence above it. Pay-as-you-go providers have
+    // no binding window and fall back to the fullest, as their cards do.
     const charted = scheduler.getRisk(p.id)?.metric ?? prim.name;
     providers.push({
       id: p.id,
