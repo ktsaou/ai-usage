@@ -97,7 +97,7 @@ header{
 
 /* ---------- overview strip ---------- */
 .overview{
-  display:flex;align-items:stretch;gap:0;flex-wrap:wrap;
+  display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;
   margin:26px 0 30px;padding:20px 26px;
   background:linear-gradient(120deg,var(--surface),var(--surface2));
   border:1px solid var(--border);border-radius:14px;
@@ -105,10 +105,16 @@ header{
 }
 .overview::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
   background:linear-gradient(90deg,#2dd4bf,#60a5fa,#c084fc,#f472b6);opacity:.7}
-.ov-item{padding:2px 34px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center}
+/* `min-width:0` is what lets a tile shrink below its content: without it a
+   flex item refuses to go under its longest line, and six tiles that together
+   want 17px more than the strip has pushed one onto a second row — a wrap that
+   looked like the numbers were too big when it was the captions and the tiles'
+   own 408px of padding. Shrinking wraps a caption inside its tile instead,
+   which stays one row however long a provider name gets. */
+.ov-item{padding:2px 26px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;flex:0 1 auto;min-width:0}
 .ov-item:first-child{padding-left:0}
 .ov-item:last-child{border-right:none}
-.ov-num{font-family:var(--mono);font-weight:700;font-size:34px;line-height:1.05;letter-spacing:-.02em}
+.ov-num{font-family:var(--mono);font-weight:700;font-size:34px;line-height:1.05;letter-spacing:-.02em;white-space:nowrap}
 .ov-num.small{font-size:22px}
 .ov-num.ok{color:var(--ok)}.ov-num.warn{color:var(--warn)}.ov-num.crit{color:var(--crit)}
 .ov-label{font-size:10.5px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase;margin-top:6px}
@@ -201,6 +207,13 @@ footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--border);
 footer a{color:var(--muted);text-decoration:none}
 footer a:hover{color:var(--text)}
 .empty{color:var(--faint);font-family:var(--mono);font-size:12px;padding:20px 0}
+/* Six tiles shrink gracefully while the strip is wide; below that there is no
+   width left to share, so let them wrap into rows again rather than become
+   six unreadable slivers. */
+@media(max-width:900px){
+  .overview{flex-wrap:wrap}
+  .ov-item{flex:0 0 auto}
+}
 @media(max-width:640px){
   .ov-item{padding:2px 20px}
   .ov-num{font-size:26px}
@@ -400,7 +413,15 @@ function computePayg(p, anchors){
   return {mode,ready:true,big:spent,bigUnit:'USD',lvl,barPct,sub:`pace $${pace.toFixed(2)}/d · 30d ≈ $${proj30.toFixed(0)}${sinceFirst?' · since '+new Date(base.t).toLocaleDateString():' · '+winDays+'d'}`};
 }
 
+function updatePaygTotal(){
+  let remSum=0,spendSum=0;
+  for(const p of providersData){ const pg=cache[p.id]&&cache[p.id].payg; if(!pg||!pg.ready)continue; if(pg.mode==='balance')remSum+=pg.big; else spendSum+=pg.big; }
+  const ovBal=document.getElementById('ov-balance'); if(ovBal) ovBal.textContent=remSum>0?'$'+remSum.toFixed(2):(spendSum>0?'$'+spendSum.toFixed(2):'–');
+  const ovSub=document.getElementById('ov-payg-sub'); if(ovSub) ovSub.textContent=remSum>0&&spendSum>0?`balance · 7d spend $${spendSum.toFixed(2)}`:(spendSum>0?'7-day spend':(remSum>0?'remaining balance':'pay-as-you-go'));
+}
+
 function injectCached(){
+  updatePaygTotal();
   for(const [id,c] of Object.entries(cache)){
     const sp=document.querySelector(`[data-trend="${id}"]`); if(sp) sp.innerHTML=c.trend||'';
     const pg=c.payg;
@@ -499,10 +520,6 @@ function renderProviders(){
 
   countUp('ov-live',live); countUp('ov-healthy',healthy); countUp('ov-warn',warn); countUp('ov-crit',crit);
   document.getElementById('ov-live-sub').textContent=`of ${providersData.length} · ${providersData.filter(p=>p.parked).length} parked`;
-  let remSum=0,spendSum=0;
-  for(const p of providersData){ const pg=cache[p.id]&&cache[p.id].payg; if(!pg||!pg.ready)continue; if(pg.mode==='balance')remSum+=pg.big; else spendSum+=pg.big; }
-  const ovBal=document.getElementById('ov-balance'); ovBal.textContent=remSum>0?'$'+remSum.toFixed(2):(spendSum>0?'$'+spendSum.toFixed(2):'–');
-  const ovSub=document.getElementById('ov-payg-sub'); if(ovSub) ovSub.textContent=remSum>0&&spendSum>0?`balance · 7d spend $${spendSum.toFixed(2)}`:(spendSum>0?'7-day spend':(remSum>0?'remaining balance':'pay-as-you-go'));
   if(nextReset) document.getElementById('ov-reset-sub').textContent=`${nextReset.provider} · ${nextReset.metric}`;
   const overall=crit>0?'crit':warn>0?'warn':'ok';
   document.getElementById('health-dot').className='dot '+(live===0?'down':overall);

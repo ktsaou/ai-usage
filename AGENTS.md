@@ -127,6 +127,15 @@ again every minute, per viewer.
   page — the series itself is still `LIMIT`-queried and pre-reduced in `db.ts`.
 - Responses are gzipped (`compress()` in `src/server.ts`). It is a safety net
   for the remaining endpoints, not a substitute for sending less.
+- **The overview strip is a fixed 1196px however wide the window is** (the page
+  is capped at 1240px), while its six tiles are sized by provider names and
+  figures, which are data. Sized to content they eventually overflow and one
+  wraps onto a second row — it took only 17px. The tiles therefore carry
+  `flex: 0 1 auto; min-width: 0` so they give up width and reflow their own
+  captions instead; `min-width: 0` is load-bearing, because a flex item's
+  automatic minimum otherwise pins it to its longest line. Below 900px there is
+  no width left to share and wrapping is restored. Adding a seventh tile, or a
+  longer caption, needs the row re-measured at 1280px and at 1000px.
 - Charts were removed once, then one came back deliberately: a bounded 120-point
   strip per card, agreed with the user, costing +92 bytes gzipped per refresh
   over the whole payload. That budget is what made it acceptable. Do not
