@@ -163,3 +163,51 @@ test("the chart series keeps the drop at a reset, for the consumer to clamp", ()
     assert.deepEqual(used, [0, 3], "the reset minute consumed nothing; the next consumed 3");
   });
 });
+
+/** One poll of a provider, with whichever metrics it reported that time. */
+function poll(db: DB, providerId: string, at: number, metrics: Array<[string, number]>): void {
+  db.store({
+    providerId,
+    providerType: "t",
+    name: providerId.toUpperCase(),
+    plan: null,
+    metrics: metrics.map(([name, percent]) => ({
+      name,
+      used: percent,
+      total: 100,
+      remaining: 100 - percent,
+      percent,
+      unit: "%",
+      window: null,
+      resetsAt: null,
+    })),
+    fetchedAt: at,
+    error: null,
+  });
+}
+
+test("the exported snapshot drops a metric the provider has stopped reporting", () => {
+  withDb((db) => {
+    poll(db, "a", NOW - 48 * H, [["weekly_quota", 10], ["addon_credits", 100]]);
+    poll(db, "a", NOW, [["weekly_quota", 3]]);
+
+    const rows = db.allLatest();
+    assert.deepEqual(rows.map((r) => r.metric_name), ["weekly_quota"]);
+    assert.equal(rows[0].percent, 3);
+  });
+});
+
+test("the exported snapshot keeps each provider on its own poll", () => {
+  withDb((db) => {
+    // Providers poll on independent timers, so one that has not been read for
+    // an hour must still export its whole last reading, not nothing.
+    poll(db, "a", NOW - H, [["weekly_quota", 10], ["5h_quota", 20]]);
+    poll(db, "b", NOW, [["weekly_quota", 30]]);
+
+    const rows = db.allLatest();
+    assert.deepEqual(
+      rows.map((r) => `${r.provider_id}/${r.metric_name}`),
+      ["a/5h_quota", "a/weekly_quota", "b/weekly_quota"]
+    );
+  });
+});

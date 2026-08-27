@@ -215,6 +215,52 @@ export async function fetchAlibabaCoding(config: ProviderConfig): Promise<Provid
   }
 }
 
+/**
+ * The extra-pack pool as a metric, or `null` when there is nothing to report.
+ *
+ * The packs are a **reserve**, not a quota, and a reserve constrains the plan
+ * only while it is the thing paying — while a plan window is spent and the
+ * packs are covering it. That distinction is invisible to the risk model, which
+ * can only apply plan-quota rules: fullness means elevated, and nothing left
+ * means at risk. Both are meaningless for a pool nothing is drawing on, so this
+ * decides here, where the difference is known.
+ *
+ * - **No credits left**: no metric. An empty reserve supplies nothing and is
+ *   indistinguishable from having bought no packs at all. Emitting it at 100%
+ *   made a healthy plan read `at risk` for as long as the pool stayed empty —
+ *   the plan window it once covered had already reset and was paying again.
+ * - **Credits, covering nothing**: `secondary`. Reported with its numbers and
+ *   expiry, but it never headlines a card and never sets the provider's level.
+ * - **Credits, covering a spent window**: an ordinary binding metric carrying
+ *   `coversUntil`, the soonest covered window's reset — the moment the plan
+ *   pays again, and so the deadline these credits have to reach.
+ */
+export function addonPoolMetric(
+  addon: Record<string, unknown> | null,
+  planMetrics: UsageMetric[]
+): UsageMetric | null {
+  const total = Number(addon?.totalCredits);
+  const remaining = Number(addon?.remainingCredits);
+  if (!addonHasCredits(total, remaining)) return null;
+
+  const covered = planMetrics.filter((m) => m.backstopped);
+  const resets = covered.map((m) => Number(m.resetsAt)).filter((t) => Number.isFinite(t) && t > 0);
+  const packs = Number(addon?.activeCount);
+  const expiresAt = Number(addon?.nearestExpireTime);
+
+  return metric("addon_credits", total - remaining, total, "credits", null, null, {
+    note: `extra usage packs${Number.isFinite(packs) ? ` (${packs} active)` : ""} — spent after the plan quota, and they expire rather than reset`,
+    expiresAt: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : null,
+    coversUntil: resets.length ? Math.min(...resets) : null,
+    ...(covered.length ? {} : { secondary: true }),
+  });
+}
+
+/** Credits there are to spend. Packs with nothing left cover nothing. */
+function addonHasCredits(total: number, remaining: number): boolean {
+  return Number.isFinite(total) && total > 0 && Number.isFinite(remaining) && remaining > 0;
+}
+
 export async function fetchAlibabaToken(config: ProviderConfig): Promise<ProviderResult> {
   try {
     const usage = await callGateway(config.id, "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage", {});
@@ -231,16 +277,10 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
       "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/addon/summary",
       {}
     );
-    const addonTotal = Number(addon.data?.totalCredits);
-    const addonLeft = Number(addon.data?.remainingCredits);
-    const hasAddon = addon.ok && Number.isFinite(addonTotal) && addonTotal > 0;
-    const addonCovers = hasAddon && Number.isFinite(addonLeft) && addonLeft > 0;
+    const packPool = addon.ok ? (addon.data as Record<string, unknown> | null) : null;
+    const addonCovers = addonHasCredits(Number(packPool?.totalCredits), Number(packPool?.remainingCredits));
 
     const metrics: UsageMetric[] = [];
-    // The packs are only being drawn on because a plan window is spent, so what
-    // they have to do is last until that window resets. Collected here and
-    // handed to the pool below as the deadline it must reach.
-    const bridgeUntil: number[] = [];
     // Percentages arrive as 0..1 fractions.
     const windows: Array<[string, string, string, string]> = [
       ["5h_quota", "5h", "per5HourPercentage", "per5HourResetTime"],
@@ -253,8 +293,6 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
       // Only once it is actually spent: a window still being consumed is the
       // real constraint, whether or not packs are held in reserve.
       const spent = percent >= 100 && addonCovers;
-      const resetsAt = Number(usage.data[resetKey]);
-      if (spent && Number.isFinite(resetsAt) && resetsAt > 0) bridgeUntil.push(resetsAt);
       metrics.push(
         metric(name, percent, 100, "%", window, usage.data[resetKey] ?? null, {
           ...(spent
@@ -264,18 +302,10 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
       );
     }
 
-    if (hasAddon) {
-      const packs = Number(addon.data?.activeCount);
-      const expiresAt = Number(addon.data?.nearestExpireTime);
-      metrics.push(
-        metric("addon_credits", addonTotal - addonLeft, addonTotal, "credits", null, null, {
-          note: `extra usage packs${Number.isFinite(packs) ? ` (${packs} active)` : ""} — spent after the plan quota, and they expire rather than reset`,
-          expiresAt: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : null,
-          // The soonest spent window's reset: reach it and the plan pays again.
-          coversUntil: bridgeUntil.length ? Math.min(...bridgeUntil) : null,
-        })
-      );
-    }
+    // Built from the plan windows above, which already carry `backstopped` and
+    // their own reset times, so what the packs are covering is read off them.
+    const pool = addonPoolMetric(packPool, metrics);
+    if (pool) metrics.push(pool);
 
     const sub = await callGateway(config.id, "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/subscription", {
       queryInstanceInfoRequest: { commodityCode: "sfm_tokenplansolo_public_intl" },

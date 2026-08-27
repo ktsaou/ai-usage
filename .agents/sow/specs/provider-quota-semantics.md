@@ -184,7 +184,7 @@ Three gateway calls: `…/v2/usage` (quota), `…/v2/addon/summary` (extra packs
 |---|---|---|---|
 | `5h_quota` | `%` | 5h | `per5HourPercentage`, reset `per5HourResetTime` |
 | `weekly_quota` | `%` | weekly | `per1WeekPercentage`, reset `per1WeekResetTime` |
-| `addon_credits` | `credits` | none | `totalCredits` / `remainingCredits`, expiry `nearestExpireTime`, `activeCount` in the note |
+| `addon_credits` | `credits` | none | `totalCredits` / `remainingCredits`, expiry `nearestExpireTime`, `activeCount` in the note. Emitted only while credits remain — see "reserve" below |
 
 Percentages arrive as **0..1 fractions** (percent used) and are multiplied by
 100. **The plan no longer has a 5h window**: since 2026-08-06 the usage endpoint
@@ -209,6 +209,26 @@ deadline at all and could never be at risk however fast it drained, which is the
 one thing it exists to warn about. `coversUntil` is not a reset of the pool and
 must not be rendered as one — surfaces say "must last …" / "needs …", and the
 metric's `bridging` flag marks the case.
+
+**The packs are a reserve, and are only a constraint while they are paying.**
+`addonPoolMetric()` in `src/providers/alibaba.ts` decides which of three states
+the pool is in, because the risk model cannot: to it the pool looks like any
+other quota, so fullness reads as elevated and nothing left reads as at risk,
+and neither is true of a pool nothing is drawing on.
+
+| Pool | Plan window | Emitted as |
+|---|---|---|
+| no credits left | any | **not emitted** — an empty reserve supplies nothing, and is indistinguishable from owning no packs |
+| credits, covering nothing | not spent | `secondary` — reported with its figures, note and expiry, never headlines a card, never sets the provider's level |
+| credits, covering a spent window | `backstopped` | ordinary binding metric with `coversUntil`, judged as the bridge described above |
+
+Emitting an exhausted pool as a 100% quota reported the whole subscription `at
+risk` for as long as the pool stayed empty, on both the dashboard and the MCP,
+while the plan window it had covered was reset and paying again — measured at 8
+hours and 466 consecutive polls before it was found. The rule lives in the
+fetcher and not in the risk model because "no deadline" does not imply "cannot
+be at risk" in general: OpenRouter's `credits` also has no deadline, and there
+fullness is exactly the signal. Reserve versus balance is a per-provider fact.
 
 `reset-card/list` also exists (a different kind of top-up) and returns an empty
 list; it is deliberately not parsed until a populated sample is available. The gateway answers HTTP 200 even when logged out; session state is read
@@ -521,6 +541,16 @@ removing the confirmation entirely was worse on every count (15 and 269).
   Per provider (labels `provider`, `name` only), a plan that reports its lifetime
   also exports `ai_usage_plan_seconds_remaining` and `ai_usage_plan_auto_renew`
   (1/0) — enough to alert on "ends soon and will not renew".
+- **The exported snapshot is one poll per provider, not one row per metric.**
+  `db.allLatest()` selects each provider's own newest `fetched_at` and returns
+  every metric stored under it, so a window the provider has stopped reporting
+  leaves the export at its next poll. Selecting the newest row per metric name
+  instead kept serving the last value each metric ever had, indistinguishable
+  from a live one: an Alibaba Token Plan `5h_quota` was exported for 22 days
+  after the vendor withdrew that window, and a spent `addon_credits` pool stayed
+  pinned at 100%. Providers poll on independent timers, so the maximum is taken
+  per provider; a failed poll writes nothing, so the previous reading survives
+  whole and `ai_usage_provider_state` is what marks it cached.
 - **Retention**: samples older than `retentionDays` (default 90) are deleted
   once a day. `/metrics` and the MCP read only the latest sample, so retention
   affects export only.

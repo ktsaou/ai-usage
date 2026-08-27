@@ -231,15 +231,30 @@ export class DB {
     return stmt.all(providerId);
   }
 
+  /**
+   * Every metric of each provider's most recent poll — what `/metrics` exports.
+   *
+   * Latest *per provider*, not per metric: a provider stops reporting a window
+   * when the vendor withdraws it, when a plan changes, or when an allowance is
+   * spent, and taking the newest row per metric name kept exporting the last
+   * value it ever had, with no hint that nothing was refreshing it. Two such
+   * series were being served — one frozen for 22 days — and a Prometheus rule
+   * cannot tell them from live ones. All metrics of one poll share its
+   * `fetched_at` (see `store()`), so the provider's own maximum selects exactly
+   * the last reading and nothing else.
+   *
+   * A provider whose poll fails writes nothing, so its previous reading stays
+   * whole until the next success; `ai_usage_provider_state` is what says the
+   * figures are cached.
+   */
   allLatest(): any[] {
     const stmt = this.db.prepare(`
       SELECT m.* FROM measurements m
       INNER JOIN (
-        SELECT provider_id, metric_name, MAX(fetched_at) as max_ts
-        FROM measurements GROUP BY provider_id, metric_name
+        SELECT provider_id, MAX(fetched_at) as max_ts
+        FROM measurements GROUP BY provider_id
       ) latest
       ON m.provider_id = latest.provider_id
-        AND m.metric_name = latest.metric_name
         AND m.fetched_at = latest.max_ts
       ORDER BY m.provider_id, m.metric_name
     `);
