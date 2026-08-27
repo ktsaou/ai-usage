@@ -199,6 +199,23 @@ marks such a window `backstopped`, and it is the reason that flag exists. The
 add-on metric has no window and does not reset: it carries `expiresAt`
 (the nearest pack's expiry), not `resetsAt`.
 
+**A pack has two independent ends: it is spent, or it expires.** `activeCount`
+counts packs still inside their validity window and says nothing about whether
+any credits are left in them, so `activeCount: 5` alongside
+`remainingCredits: 0` is the ordinary "all five packs bought this term are used
+up" — not a contradiction, and not a reason to re-check the parsing. Only
+`remainingCredits` decides what the pool can supply, and it is the field the
+three states below are keyed on.
+
+Whether the vendor also zeroes `remainingCredits` when a pack expires unspent
+has **not been observed**, and the fetcher does not assume it: credits are
+treated as available whatever `expiresAt` says. If the vendor keeps counting
+expired credits, a spent plan window would be marked `backstopped` — "usage now
+comes from the extra packs" — while work is in fact blocked. Resolving it needs a
+pool that reaches its expiry with credits in it, read against what the console
+shows at that moment; do not guess a rule from `expiresAt` before then, because
+guessing either way can hide a live reserve or invent one.
+
 **The packs are a bridge, and are judged as one.** They are only being drawn on
 because a plan window is spent, so the question they answer is *"do they last
 until that window resets?"* — after which the plan pays again. The fetcher puts
