@@ -27,6 +27,12 @@
       "env": { "apiKey": "KIMI_CODING_API_KEY" }
     },
     {
+      "id": "xai",
+      "type": "xai",
+      "name": "xAI SuperGrok",
+      "env": {}
+    },
+    {
       "id": "mimo",
       "type": "mimo",
       "name": "MiMo Max",

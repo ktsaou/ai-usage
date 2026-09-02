@@ -2,7 +2,7 @@
 
 ## Goals
 
-AI subscription usage monitor daemon. Polls multiple AI provider APIs (z.ai, minimax, kimi, mimo, deepseek, openrouter, alibaba) for remaining quota/balance, stores history in SQLite, exposes Prometheus metrics, an MCP server, and a web dashboard. Runs as a systemd service under its own unprivileged user, installed to `/opt/ai-usage`.
+AI subscription usage monitor daemon. Polls multiple AI provider APIs (z.ai, minimax, kimi, x.ai, mimo, deepseek, openrouter, alibaba) for remaining quota/balance, stores history in SQLite, exposes Prometheus metrics, an MCP server, and a web dashboard. Runs as a systemd service under its own unprivileged user, installed to `/opt/ai-usage`.
 
 Partially implemented: remote agents can POST usage data to `/api/ingest`, and it is stored and exported to Prometheus, but ingested providers do not appear on the dashboard or in the MCP, and the endpoint does not validate its payload. Do not treat it as a working feature.
 
@@ -44,12 +44,13 @@ sudo bash install.sh   # install to /opt/ai-usage, create user, enable service
 Every provider is dispatched through the registry in `src/providers/fetch.ts`; browser-based ones live in their own modules but are registered there too, so the scheduler and the test harness never special-case a provider type. The scheduler polls non-parked providers on `pollIntervalSeconds` (default 60s). Results are stored in SQLite and exposed via `/api/providers`, `/api/summary`, `/api/history/:id`, `/metrics`, and the dashboard.
 
 Provider types:
-- **Subscription quota** (zai, minimax, kimi, mimo, alibaba): used/total/remaining/percent per window
+- **Subscription quota** (zai, minimax, kimi, xai, mimo, alibaba): used/total/remaining/percent per window
 - **Pay-as-you-go** (deepseek, openrouter): configured via `payg` field — `balance` (remaining $ + runway), `spend` (window spend + pace), `budget` (spend vs cap)
+- **OAuth subscription** (xai): no API key; polled with an OAuth access token from a credential file the daemon refreshes itself (`src/providers/xai.ts`), against the undocumented endpoint xAI's own coding CLI uses. The user mints the file with `npm run login:xai` (device-code sign-in, no local browser needed) and moves it with `npm run sync:auth`. **The refresh token rotates on every refresh, so the file has exactly one holder**: it is moved rather than copied, never copied back from the daemon host, and never shared with another consumer of the same account (a proxy holding its own token for the account must keep its own file). The x.ai API product (console keys, team billing) is a different provider and is not this one.
 - **Browser-session** (mimo, alibaba-coding, alibaba-token, flagged `playwright: true`): no usable API key; polled through one shared logged-in chromium profile (`src/providers/browser.ts`), one tab per provider. The user creates the profile with `npm run login` on a desktop and ships it with `npm run sync:profile`. Alibaba's console login is session-cookie-only, so those cookies are saved into the profile and re-injected on launch — without that the session dies on every restart. Read the session model in the spec before touching these.
 - **Parked** (`parked: true`): not polled, muted on the dashboard, hidden from the MCP. Nothing is parked today.
 
-Runtime state on the daemon host lives under `/opt/ai-usage`: `data/` (SQLite), `browser/profile` (the logged-in profile, `0700`), `.cache/ms-playwright` (chromium). `install.sh` must never delete these — they are excluded from its rsync.
+Runtime state on the daemon host lives under `/opt/ai-usage`: `data/` (SQLite), `browser/profile` (the logged-in profile, `0700`), `auth/` (OAuth credential files, `0700`/`0600`), `.cache/ms-playwright` (chromium). `install.sh` must never delete these — they are excluded from its rsync — and the service unit lists each writable one in `ReadWritePaths`.
 
 Per-provider field semantics (metric names, units, windows, reset-time source, unlimited quotas) are documented in `.agents/sow/specs/provider-quota-semantics.md` — the source of truth when changing fetchers or MCP/dashboard rendering.
 

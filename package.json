@@ -8,7 +8,9 @@
     "agent": "tsx src/agent/main.ts",
     "mcp": "tsx src/mcp.ts",
     "login": "tsx src/login.ts",
+    "login:xai": "tsx src/login-xai.ts",
     "sync:profile": "bash scripts/sync-profile.sh",
+    "sync:auth": "bash scripts/sync-auth.sh",
     "test": "node --import tsx --test src/*.test.ts",
     "test:all": "tsx src/test-all.ts"
   },

@@ -22,14 +22,17 @@ Environment=NODE_ENV=production
 Environment=HOME=/opt/ai-usage
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ai-usage/.cache/ms-playwright
 Environment=AI_USAGE_BROWSER_DIR=/opt/ai-usage/browser/profile
+# OAuth credential files (xai) live here; the daemon rewrites them on refresh.
+Environment=AI_USAGE_AUTH_DIR=/opt/ai-usage/auth
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 # The profile must stay writable: these sites rotate session cookies, and a
-# read-only profile loses the session within hours.
-ReadWritePaths=/opt/ai-usage/data /opt/ai-usage/browser
+# read-only profile loses the session within hours. The same goes for the OAuth
+# credentials, whose refresh token rotates on every refresh.
+ReadWritePaths=/opt/ai-usage/data /opt/ai-usage/browser /opt/ai-usage/auth
 PrivateTmp=true
 
 [Install]

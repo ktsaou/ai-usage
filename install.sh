@@ -40,14 +40,15 @@ fi
 
 # 2. Install to /opt/ai-usage
 run sudo mkdir -p "${INSTALL_DIR}"
-# 'browser' (logged-in profile) and '.cache' (chromium) are runtime state that
-# --delete would otherwise wipe on every deploy.
+# 'browser' (logged-in profile), 'auth' (OAuth credential files) and '.cache'
+# (chromium) are runtime state that --delete would otherwise wipe on every deploy.
 run sudo rsync -a --delete \
   --exclude '.git' \
   --exclude '.env' \
   --exclude 'node_modules' \
   --exclude 'data' \
   --exclude 'browser' \
+  --exclude 'auth' \
   --exclude '.cache' \
   "${REPO_DIR}/" "${INSTALL_DIR}/"
 
@@ -63,8 +64,9 @@ else
   echo -e "${YELLOW}⚠ No .env found in ${REPO_DIR} — create one before starting the service${NC}"
 fi
 
-# 5. Create data and browser-profile directories
-run sudo mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/browser"
+# 5. Create the runtime-state directories
+run sudo mkdir -p "${INSTALL_DIR}/data" "${INSTALL_DIR}/browser" "${INSTALL_DIR}/auth"
+run sudo chmod 700 "${INSTALL_DIR}/auth"
 
 # 6. Set ownership
 run sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"

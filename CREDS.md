@@ -84,6 +84,53 @@ The profile lives at `~/.local/share/ai-usage/profile` on your workstation and
 daemon host. It holds live session cookies for those accounts, including
 `ai-usage-session.json`. It is never committed and must not be shared.
 
+## xAI SuperGrok (OAuth)
+
+The subscription has **no API key** that reports its allowance: xAI's own coding
+CLI reads it with the subscription's OAuth token, and so does the daemon, from
+a credential file it refreshes by itself. An API key from console.x.ai is a
+different product (pay per token) and is not used here.
+
+### One-time setup
+
+On your workstation:
+
+```bash
+npm run login:xai      # prints a URL and a code; no local browser needed
+```
+
+Open the URL anywhere, sign in with the account that holds the subscription,
+enter the code. The command waits, then verifies the file against the real
+billing endpoint and prints your live numbers.
+
+```bash
+npm run sync:auth      # moves the file to the daemon host and verifies the next poll
+```
+
+Set the target host with `AI_USAGE_REMOTE` in your `.env` (not committed), or
+pass it explicitly: `npm run sync:auth -- myhost`. No restart is needed — the
+daemon reads the file on every poll.
+
+### When it expires
+
+Normally you do nothing: the access token lasts six hours and the daemon
+refreshes it in the poll that needs it. The refresh token rotates on every
+refresh, which is why the file is **moved**, not copied, and why it must never
+be shared with another consumer of the same account — whichever refreshes last
+leaves the other logged out.
+
+You are only needed when a refresh is refused (the token was revoked, the
+sign-in was done elsewhere with the same file, or the password changed). Then
+the provider shows `login required — run npm run login:xai, then npm run
+sync:auth`, and you repeat the two commands above.
+
+### What is stored, and where
+
+`xai.json` under `~/.local/share/ai-usage/auth/` on your workstation until it
+is moved, then `/opt/ai-usage/auth/xai.json` (mode `0600`, owned by the service
+user) on the daemon host. It holds the live access and refresh tokens. It is
+never committed and must not be shared.
+
 ## DEEPSEEK_API_KEY
 
 Standard DeepSeek API key.

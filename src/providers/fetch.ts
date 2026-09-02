@@ -3,6 +3,7 @@ import { resolveEnvVar } from "../config.js";
 import { result, metric } from "./common.js";
 import { fetchAlibabaCoding, fetchAlibabaToken } from "./alibaba.js";
 import { fetchMimo } from "./mimo.js";
+import { fetchXai } from "./xai.js";
 
 type FetchFn = (config: ProviderConfig) => Promise<ProviderResult>;
 
@@ -203,11 +204,13 @@ async function fetchOpenrouter(config: ProviderConfig): Promise<ProviderResult> 
 }
 
 // mimo and the alibaba plans have no usable API key; they poll through the
-// shared logged-in browser session (see providers/browser.ts).
+// shared logged-in browser session (see providers/browser.ts). xai polls with
+// an OAuth token from a credential file the daemon refreshes itself.
 const registry: Record<string, FetchFn> = {
   zai: fetchZai,
   minimax: fetchMinimax,
   kimi: fetchKimi,
+  xai: fetchXai,
   mimo: fetchMimo,
   deepseek: fetchDeepseek,
   openrouter: fetchOpenrouter,

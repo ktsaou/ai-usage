@@ -75,6 +75,56 @@ The top-level `usage` is the weekly quota (its reset is days out); `limits[]`
 carries the short windows. A dedup guard keys on the window label so each window
 appears once.
 
+## xAI SuperGrok (`type: xai`)
+
+Endpoint `GET cli-chat-proxy.grok.com/v1/billing?format=credits`, headers
+`Authorization: Bearer <OAuth access token>` and `X-XAI-Token-Auth: xai-grok-cli`.
+Plan from `GET cli-chat-proxy.grok.com/v1/settings` → `subscription_tier_display`
+(e.g. `SuperGrok Plus`). Verified against live replies (2026-09-03).
+
+**The endpoint is undocumented.** xAI publishes no usage API for the consumer
+subscription; this is the one its own coding CLI polls (`xai-org/grok-build`,
+`crates/codegen/xai-grok-shell/src/extensions/billing.rs`), every 60 s, with the
+same public client id and scopes the daemon uses. Its documented usage endpoints
+(`management-api.x.ai`, `GET /v1/api-key`) belong to the API-console product,
+take a management key or an API key, and describe pay-per-token billing — a
+different product, and a different provider if ever monitored.
+
+| API entry | Metric | Unit | Window | Notes |
+|---|---|---|---|---|
+| `config.creditUsagePercent` + `config.currentPeriod` | `weekly_quota` | `%` | weekly | Percent **used** of the week's included allowance; the backend floors it, so 100 means truly exhausted. **Absent when zero** (proto3), read as 0. Reset = `currentPeriod.end`, a true reset anchored to the subscription's start instant, not a calendar week. `currentPeriod.type` must contain `WEEKLY`; anything else is an error, not a guess. |
+| `config.prepaidBalance.val` | `prepaid_credits` | `USD` | none | Extra usage bought on top of the plan, in cents, **stored negative** (`abs` is taken). Emitted only when positive. A dollar balance with no known total: `used` null, `total` = balance, no percent. |
+| `config.onDemandCap`, `config.onDemandUsed` | — | | | The older extra-usage mode of the same subscription (`isUnifiedBillingUser: false`): overage charged to the saved payment method up to a monthly cap. Not emitted — it cannot be observed on a unified account and xAI is migrating accounts off it. |
+| `config.productUsage[]`, `config.history[]`, `config.topUpMethod` | — | | | Ignored, as xAI's own client ignores them (`productUsage` is not even in its struct; `history` is logged, never rendered). |
+
+**Prepaid credits are a reserve, judged by the Alibaba pack rule.** xAI's client
+states it directly: "credits are only drawn down at 100% usage". So while the
+week is below 100% the balance is `secondary` — reported, never a headline,
+never the provider's level. At 100% with a positive balance the week is
+`backstopped` (work continues from the credits) and the balance carries
+`coversUntil = currentPeriod.end`, the moment it has to reach. With no credits
+the week stays the binding window and reads exhausted, which it is.
+
+**The balance has no denominator, so it is never judged by pace.** The proxy
+reports what is left, not what was bought, and the risk model measures burn in
+percent of a quota (`src/risk.ts`, `db.metricAnchors`). The balance therefore
+renders as a dollar figure — the DeepSeek balance shape — and a spent week with
+credits left reports the provider `ok` with no binding window, not `crit`.
+Judging the credits by pace against the reset needs a denominator chosen from
+history and is a model change, tracked as its own SOW; nothing about it is
+decided here because no positive balance has been observed yet.
+
+**Credentials.** OAuth issuer `auth.x.ai` (OIDC discovery), device-code grant
+for the one-time sign-in, refresh grant in the poll that finds the access token
+within five minutes of its six-hour expiry. **The refresh token rotates on every
+refresh**, so the credential file has exactly one holder: `npm run sync:auth`
+moves it to the daemon host and deletes the local copy, and a refresh is never
+retried on a transport failure — the server may have consumed the token before
+the reply was lost. A refused refresh (`invalid_grant`) reports `login required
+— run npm run login:xai, then npm run sync:auth`; a 401 from the proxy reports
+the same; a 403 reports that xAI does not allow the account on its CLI surface,
+which third parties have seen for some subscription tiers.
+
 ## Pay-as-you-go (unchanged)
 
 - **DeepSeek** (`payg: balance`): `GET api.deepseek.com/user/balance`. Lifetime
