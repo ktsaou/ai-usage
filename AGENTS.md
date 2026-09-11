@@ -234,6 +234,11 @@ callback parameter so the tab lands where the poll expects it.
 
 ### Debugging rules learned the hard way
 
+- **When the self sign-in fails, read the landing line first.** The journal
+  records where the tab ended up (origin, path, title — never the query) and
+  whether a longer settle restored the session. That line is the difference
+  between "the identity session is dead" and "the console changed"; the
+  gateway's reply is identical in both cases.
 - **Auth failure is not "no data".** These consoles answer HTTP 200 while
   logged out and signal it in a body field; one returns an error code, another
   is detected by the tab sitting on a different origin. Never detect login

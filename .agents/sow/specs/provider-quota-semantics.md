@@ -155,9 +155,15 @@ which completes the OAuth round trip against the identity session stored in the
 profile and lands back on the console signed in. The identity session's cookies
 are persistent and long-lived (over a year), so the two-day console lifetime is
 no longer visible to the operator. Attempts are single-flighted across the two
-alibaba providers and rate limited to one per 10 minutes; only when this also
-fails does the provider report `session expired and automatic sign-in did not
-restore it`, which is the operator's cue to run `npm run login`.
+alibaba providers and rate limited to one per 10 minutes. The session is judged
+3s after the sign-in lands; when it is still dead the journal records where the
+tab landed — origin, path and page title, never the query, which carries auth
+codes — waits 10s more and judges once again, saying whether the longer wait was
+what it needed. Only when that also fails does the provider report `session
+expired and automatic sign-in did not restore it`, which is the operator's cue
+to run `npm run login`. The landing line is the evidence that tells a dead
+identity session, a challenge page and a changed console entry point apart;
+the gateway's reply cannot.
 
 The button on that page cannot be clicked headlessly — an anti-bot overlay
 (`baxia-dialog-mask`) covers it — but its `href` works.

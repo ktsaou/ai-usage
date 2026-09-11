@@ -29,19 +29,52 @@ const RELOGIN_FAILED =
 // sharing this console cannot start two sign-ins at once, and rate limited so a
 // genuinely dead identity session is not retried every poll.
 const RELOGIN_COOLDOWN_MS = 10 * 60 * 1000;
+// How long the sign-in gets to settle before the session is judged: the round
+// trip lands on the console, whose own scripts may still be minting cookies.
+const RELOGIN_SETTLE_MS = 3000;
+// A second chance for a landing page that is slow to finish signing in, taken
+// only after the first judgement failed, so the ordinary case pays nothing.
+const RELOGIN_SETTLE_RETRY_MS = 10000;
 let lastReloginAt = 0;
-let reloginInFlight: Promise<void> | null = null;
+let reloginInFlight: Promise<string | null> | null = null;
 
-function relogin(page: Page): Promise<void> {
+/**
+ * Where a tab ended up, safe for the journal: origin and path only. The query
+ * and fragment are dropped because sign-in redirects carry auth codes, and the
+ * title is capped because a page can put anything there.
+ */
+export function describeLanding(url: string, title: string): string {
+  let where: string;
+  try {
+    const u = new URL(url);
+    // An error page has an opaque origin ("null"); its scheme and host still say what it is.
+    where = `${u.origin === "null" ? `${u.protocol}//${u.host}` : u.origin}${u.pathname}`;
+  } catch {
+    where = "(unparseable url)";
+  }
+  const t = title.replace(/\s+/g, " ").trim().slice(0, 80);
+  return t ? `${where} "${t}"` : where;
+}
+
+/**
+ * Signs in again through the identity provider and resolves to where the tab
+ * landed, or null when no sign-in was attempted (cooldown). When the session
+ * is still dead afterwards, the landing is the only evidence of why: a challenge
+ * page, a consent screen, a changed console entry point all look the same in
+ * the gateway's reply and different here.
+ */
+function relogin(page: Page): Promise<string | null> {
   if (reloginInFlight) return reloginInFlight;
-  if (Date.now() - lastReloginAt < RELOGIN_COOLDOWN_MS) return Promise.resolve();
+  if (Date.now() - lastReloginAt < RELOGIN_COOLDOWN_MS) return Promise.resolve(null);
 
   console.log("[alibaba] console session expired — signing in again");
   reloginInFlight = page
     .goto(THIRD_PARTY_LOGIN, { waitUntil: "domcontentloaded", timeout: 60000 })
-    .then(() => page.waitForTimeout(3000))
+    .then(() => page.waitForTimeout(RELOGIN_SETTLE_MS))
+    .then(async () => describeLanding(page.url(), await page.title().catch(() => "")))
     .catch((err: any) => {
       console.error(`[alibaba] sign-in navigation failed: ${err.message?.split("\n")[0]}`);
+      return describeLanding(page.url(), "");
     })
     .finally(() => {
       lastReloginAt = Date.now();
@@ -119,11 +152,25 @@ async function callGateway(
   res = await gatewayFetch(page, api, data);
   if (!res.loggedOut) return res;
 
-  await relogin(page);
+  const landing = await relogin(page);
   // The sign-in lands back on the console, so the tab is normally usable
   // already; getPage re-navigates only if it is not.
   page = await getPage(key, CONSOLE_URL);
-  return gatewayFetch(page, api, data);
+  res = await gatewayFetch(page, api, data);
+  if (!res.loggedOut || landing === null) return res;
+
+  // The sign-in happened and did not take. Say where it landed, then give a
+  // slow landing page one longer chance before reporting the operator error.
+  console.error(`[alibaba] sign-in did not restore the session — landed on ${landing}`);
+  await page.waitForTimeout(RELOGIN_SETTLE_RETRY_MS);
+  page = await getPage(key, CONSOLE_URL);
+  res = await gatewayFetch(page, api, data);
+  console.error(
+    res.loggedOut
+      ? `[alibaba] still logged out ${RELOGIN_SETTLE_RETRY_MS / 1000}s later — now on ${describeLanding(page.url(), await page.title().catch(() => ""))}`
+      : `[alibaba] session restored after a longer wait — the sign-in needs more than ${RELOGIN_SETTLE_MS / 1000}s to settle`
+  );
+  return res;
 }
 
 /**

@@ -72,6 +72,10 @@ session itself expired, the password changed, or the provider now demands a
 challenge. Then the provider shows `session expired and automatic sign-in did
 not restore it — run npm run login, then npm run sync:profile`, and you repeat
 the two commands above. Expect that roughly once a year, not every few days.
+The journal says why: `[alibaba] sign-in did not restore the session — landed
+on <origin/path> "<page title>"` names the page the sign-in ended on (a
+challenge or consent page, or the console itself when its scripts were slow),
+followed by whether a 10s longer wait restored it.
 
 ⚠️ After syncing, avoid running the browser providers locally
 (`npm run test:all mimo`, `alibaba-coding`, `alibaba-token`) — the workstation
