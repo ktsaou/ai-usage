@@ -41,7 +41,9 @@ On a machine with a screen (not the server):
 npm run login        # opens a browser window with one tab per site
 ```
 
-Sign in to both tabs — MiMo with your Xiaomi account, Alibaba with Google.
+Sign in to each tab — Alibaba with Google, MiMo with your Xiaomi account.
+A parked provider (`parked: true` in `config.json`, as MiMo is while its plan
+is lapsed) gets no tab and is not waited for.
 Nothing navigates while you work. The window closes by itself once every
 session is verified against the real quota APIs, and prints your live numbers.
 

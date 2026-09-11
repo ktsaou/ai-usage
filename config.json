@@ -37,7 +37,8 @@
       "type": "mimo",
       "name": "MiMo Max",
       "env": {},
-      "playwright": true
+      "playwright": true,
+      "parked": true
     },
     {
       "id": "alibaba-coding",

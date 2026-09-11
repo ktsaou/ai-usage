@@ -37,7 +37,10 @@ const TIMEOUT_MS = Number(process.env.AI_USAGE_LOGIN_TIMEOUT || "1800") * 1000;
 const POLL_MS = 5000;
 
 const config = loadConfig();
-const byId = new Map(config.providers.map((p) => [p.id, p]));
+// A parked provider is not polled, so its session is not needed: its tab is not
+// opened and the user is not asked to sign in to it. Otherwise a lapsed plan
+// would keep this tool waiting for a sign-in that can never verify.
+const byId = new Map(config.providers.filter((p) => !p.parked).map((p) => [p.id, p]));
 // Verification reuses the production fetchers, so a PASS means the daemon will
 // succeed with this profile — not merely that a page looked logged in.
 const checks: Array<{ id: string; label: string; cfg: ProviderConfig }> = (
@@ -49,6 +52,11 @@ const checks: Array<{ id: string; label: string; cfg: ProviderConfig }> = (
 )
   .map(([id, label]) => ({ id, label, cfg: byId.get(id)! }))
   .filter((c) => c.cfg);
+const sites = SITES.filter((site) => site.providerIds.some((id) => byId.has(id)));
+if (!checks.length) {
+  console.log("Every browser-session provider is parked — nothing to sign in to.");
+  process.exit(0);
+}
 
 const dir = profileDir();
 console.log(`Profile: ${dir}\n`);
@@ -62,7 +70,7 @@ context.on("close", () => {
 });
 
 const tabs: Page[] = [];
-for (const [i, site] of SITES.entries()) {
+for (const [i, site] of sites.entries()) {
   const page = i === 0 ? context.pages()[0] || (await context.newPage()) : await context.newPage();
   await page.goto(site.url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
   for (const id of site.providerIds) adoptPage(id, page);
@@ -73,8 +81,8 @@ for (const [i, site] of SITES.entries()) {
 setPassive(true);
 
 console.log("A browser window is open with one tab per site:\n");
-for (const site of SITES) console.log(`  • ${site.label}`);
-console.log("\nSign in to both. Nothing will open or navigate while you do —");
+for (const site of sites) console.log(`  • ${site.label}`);
+console.log(`\nSign in to ${sites.length === 1 ? "it" : "each"}. Nothing will open or navigate while you do —`);
 console.log("the window closes by itself once every session works.\n");
 
 const passed = new Set<string>();
