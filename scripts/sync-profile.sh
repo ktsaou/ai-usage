@@ -88,7 +88,7 @@ import json, sys
 data = json.load(sys.stdin)
 bad = 0
 for p in data.get("providers", []):
-    if not p.get("playwright"):
+    if not p.get("playwright") or p.get("parked"):
         continue
     pid = p["id"]
     lf = p.get("lastFetch")
