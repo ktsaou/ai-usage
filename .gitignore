@@ -12,3 +12,4 @@ Cookies-journal
 dist/
 *.db
 *.local.md
+.tmp

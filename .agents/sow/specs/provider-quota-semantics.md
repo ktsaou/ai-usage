@@ -207,6 +207,16 @@ Console `platform.xiaomimimo.com/console/balance`.
 |---|---|---|---|
 | `monthly_credits` | `credits` | monthly | Real counts (e.g. 66.7B of 82B). Reset = `currentPeriodEnd`, which is **Beijing local time without a zone marker** and is parsed as `+08:00`. |
 
+Observed 2026-09-22 (plan re-bought after the MiMo 2.6 release): `usage.items[]`
+also carries `compensation_total_token`, and a sibling `monthUsage.items[]`
+carries `month_total_token` with the same `used`/`limit` as `plan_total_token`.
+Neither is emitted: the compensation entry has had `limit: 0` in every reading
+(an empty pool supplies nothing — if it ever fills it is a reserve in the
+Alibaba-pack sense and must be judged as one, not as a quota), and
+`monthUsage` duplicates the plan figures. An account without a plan answers the
+same call with no `plan_total_token` entry, which the fetcher reports as
+`no token plan quota in response`; the console session itself stays valid.
+
 ### Alibaba Coding Plan (`type: alibaba-coding`)
 
 Console gateway API
