@@ -63,7 +63,9 @@ Normally you do nothing — both providers renew themselves:
 - **MiMo** re-mints its short-lived token from a credential that lasts a month.
 - **Alibaba's console session lasts exactly 48h from sign-in**, whether or not
   it is used. The daemon signs in again by itself, reusing the identity-provider
-  session in the profile, which is good for about a year. The journal records
+  session in the profile, which is good for about two weeks — an absolute
+  lifetime that use does not extend (its cookies read a year out; that is the
+  cookie's expiry, not the session's). The journal records
   `[alibaba] console session expired — signing in again`, one poll reports an
   error, and the next one is back to normal.
 
@@ -71,7 +73,8 @@ You are only needed when the automatic sign-in cannot work either — the identi
 session itself expired, the password changed, or the provider now demands a
 challenge. Then the provider shows `session expired and automatic sign-in did
 not restore it — run npm run login, then npm run sync:profile`, and you repeat
-the two commands above. Expect that roughly once a year, not every few days.
+the two commands above. Expect that about every two weeks; the 48h renewals in
+between need nothing from you.
 The journal says why: `[alibaba] sign-in did not restore the session — landed
 on <origin/path> "<page title>"` names the page the sign-in ended on (a
 challenge or consent page, or the console itself when its scripts were slow),

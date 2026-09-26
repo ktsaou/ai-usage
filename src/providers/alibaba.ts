@@ -24,10 +24,15 @@ const RELOGIN_FAILED =
 
 // The console session lasts 48h from sign-in regardless of use (measured twice,
 // to the minute, while polls ran throughout). Rather than asking the user to
-// sign in every two days, mint a new one from the identity provider's session,
-// which lasts about a year. Attempts are single-flighted so the two providers
-// sharing this console cannot start two sign-ins at once, and rate limited so a
-// genuinely dead identity session is not retried every poll.
+// sign in every two days, mint a new one from the identity provider's session.
+// That session lasts about two weeks, absolutely — measured once, created at
+// sign-in and dead to within minutes 14 days later while re-auths used it
+// throughout, so use does not extend it. Its cookies read a ~13-month expiry,
+// which is the cookie's lifetime, not the session's: the identity provider
+// kills the session server-side on its own schedule, and the sign-in landing
+// on its account chooser is the tell. Attempts are single-flighted so the two
+// providers sharing this console cannot start two sign-ins at once, and rate
+// limited so a genuinely dead identity session is not retried every poll.
 const RELOGIN_COOLDOWN_MS = 10 * 60 * 1000;
 // How long the sign-in gets to settle before the session is judged: the round
 // trip lands on the console, whose own scripts may still be minting cookies.

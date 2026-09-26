@@ -152,9 +152,14 @@ The daemon therefore **signs itself in again**: when the gateway reports
 page's third-party sign-in `href`
 (`account.alibabacloud.com/login/third_party_bind_login.htm?type=google&oauth_callback=<console>`),
 which completes the OAuth round trip against the identity session stored in the
-profile and lands back on the console signed in. The identity session's cookies
-are persistent and long-lived (over a year), so the two-day console lifetime is
-no longer visible to the operator. Attempts are single-flighted across the two
+profile and lands back on the console signed in. The identity session lasts
+**about 14 days, absolutely** (measured 2026-09-25: created at sign-in, dead to
+within minutes 14 days later, with the automatic re-auths using it every 48h in
+between — use does not extend it). Its cookies carry a ~13-month expiry; that is
+the cookie's lifetime, not the session's, which the identity provider kills
+server-side on its own schedule — do not read one as the other. It therefore
+shortens the operator's sign-in cadence from two days to about two weeks rather
+than removing it. Attempts are single-flighted across the two
 alibaba providers and rate limited to one per 10 minutes. The session is judged
 3s after the sign-in lands; when it is still dead the journal records where the
 tab landed — origin, path and page title, never the query, which carries auth
