@@ -253,14 +253,24 @@ Three gateway calls: `…/v2/usage` (quota), `…/v2/addon/summary` (extra packs
 
 | Metric | Unit | Window | Source fields |
 |---|---|---|---|
-| `5h_quota` | `%` | 5h | `per5HourPercentage`, reset `per5HourResetTime` |
-| `weekly_quota` | `%` | weekly | `per1WeekPercentage`, reset `per1WeekResetTime` |
+| `5h_quota` | `%` | 5h | `per5HourPercentage`, reset `per5HourResetTime` — **no longer sent by the vendor** (removed 2026-08-06); emitted again only if the field returns |
+| `monthly_quota` | `%` | monthly | `per1MonthPercentage`, reset `per1MonthResetTime` — the current window; it replaced the weekly one on 2026-09-22 |
 | `addon_credits` | `credits` | none | `totalCredits` / `remainingCredits`, expiry `nearestExpireTime`, `activeCount` in the note. Emitted only while credits remain — see "reserve" below |
 
 Percentages arrive as **0..1 fractions** (percent used) and are multiplied by
-100. **The plan no longer has a 5h window**: since 2026-08-06 the usage endpoint
-returns only `per1Week*` and the console shows a single 7-day quota. The metric
-is emitted only when the field is present, so it simply stopped appearing.
+100. The window set has changed twice under the same endpoint, both times
+silently (the poll succeeded; the metric quietly vanished): the 5h window was
+removed on 2026-08-06 — the payload then kept only `per1Week*` — and on
+2026-09-22 the weekly window was replaced by a monthly one, captured live as
+`per1MonthPercentage` with the reset in `per1MonthResetTime` (first observed
+reset 2026-10-19 16:00 UTC). The fetcher emits whatever window fields are
+present; when **no** window field is recognised it logs the payload's field
+names to the journal on every poll until the shape is understood, and the
+add-on metric's note states that the plan's own quota is not currently
+reported. In that state the card's fallback headline is the add-on pool — the
+one documented exception to "secondary never headlines a card", since the
+fallback exists so a card is never headless and the pool is then the only
+consumption data the daemon has.
 
 **Extra usage packs** (`addon/summary`, request payload `{}`) are quota bought on
 top of the plan. The console spends the plan quota first and then these, stating

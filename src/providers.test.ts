@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addonPoolMetric } from "./providers/alibaba.js";
+import { addonPoolMetric, tokenPlanMetrics } from "./providers/alibaba.js";
 import { computeProviderRisk, type RiskHistory } from "./risk.js";
 import type { ProviderResult, UsageMetric } from "./types.js";
 
@@ -23,6 +23,9 @@ function planWindow(percent: number, extra: Partial<UsageMetric> = {}): UsageMet
 }
 
 const POOL = { totalCredits: 100000, remainingCredits: 40000, activeCount: 5, nearestExpireTime: NOW + 400 * H };
+
+/** A per1MonthResetTime as captured live from the reshaped usage endpoint. */
+const MONTH_RESET = 1_792_425_600_000;
 
 test("an exhausted pack pool is not reported at all", () => {
   // The state that made a working plan read `at risk`: the pool is spent, the
@@ -107,4 +110,51 @@ test("a held reserve cannot make a healthy provider look elevated", () => {
   assert.equal(risk.metric, "weekly_quota");
   assert.equal(risk.level, "ok");
   assert.equal(risk.metrics.addon_credits.level, "crit"); // its own reading, kept
+});
+
+test("the token plan's monthly window parses from the 0..1 fraction", () => {
+  // Sep 22: the vendor replaced the weekly window with a monthly one; the
+  // shape was captured live from the daemon (per1MonthPercentage, 0..1).
+  const { metrics, hasWindow } = tokenPlanMetrics(
+    { per1MonthPercentage: 0.205, per1MonthResetTime: MONTH_RESET },
+    POOL
+  );
+  assert.equal(hasWindow, true);
+  const monthly = metrics.find((m) => m.name === "monthly_quota")!;
+  assert.equal(monthly.percent, 20.5);
+  assert.equal(monthly.window, "monthly");
+  assert.equal(monthly.resetsAt, MONTH_RESET);
+  assert.equal(monthly.backstopped, undefined); // not spent: the plan is paying
+});
+
+test("the retired weekly shape is no longer read, and leaves no window metric", () => {
+  // A payload carrying only per1Week* (the pre-Sep-22 shape) means the vendor
+  // changed the shape again: no window is recognised, so the fetcher's
+  // diagnostic fires and the pool's note says the plan quota is missing.
+  const { metrics, hasWindow } = tokenPlanMetrics(
+    { per1WeekPercentage: 1, per1WeekResetTime: MONTH_RESET },
+    POOL
+  );
+  assert.equal(hasWindow, false);
+  assert.equal(metrics.filter((m) => m.window !== null).length, 0);
+  const pool = metrics.find((m) => m.name === "addon_credits")!;
+  assert.match(pool.note!, /not currently reported/);
+});
+
+test("a spent monthly window with credits left is backstopped and the pool binds on its reset", () => {
+  const { metrics } = tokenPlanMetrics({ per1MonthPercentage: 1, per1MonthResetTime: MONTH_RESET }, POOL);
+  const monthly = metrics.find((m) => m.name === "monthly_quota")!;
+  assert.equal(monthly.backstopped, true);
+  const pool = metrics.find((m) => m.name === "addon_credits")!;
+  assert.equal(pool.secondary, undefined); // eligible: it is the thing paying
+  assert.equal(pool.coversUntil, MONTH_RESET);
+});
+
+test("the pool's note names the missing plan quota only while no window is reported", () => {
+  const without = tokenPlanMetrics(null, POOL).metrics.find((m) => m.name === "addon_credits")!;
+  assert.match(without.note!, /not currently reported/);
+  const withWindow = tokenPlanMetrics({ per1MonthPercentage: 0.2, per1MonthResetTime: MONTH_RESET }, POOL)
+    .metrics.find((m) => m.name === "addon_credits")!;
+  assert.equal(withWindow.note!.includes("not currently reported"), false);
+  assert.match(withWindow.note!, /5 active/);
 });

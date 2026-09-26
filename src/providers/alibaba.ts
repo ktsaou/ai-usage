@@ -95,6 +95,29 @@ interface GatewayResponse {
   data: any;
 }
 
+/**
+ * A response payload the fetcher no longer recognises, safe for the journal:
+ * field names plus the values of quota-shaped fields. This endpoint has been
+ * reshaped by the vendor twice under a fetcher that emits only the fields it
+ * knows (the 5h window disappeared on Aug 6, the weekly one on Sep 22, both
+ * silently), so an unexpected shape is logged on every poll until it is
+ * understood. Cookies and identifiers are never in these payloads; values of
+ * fields that do not look like quota data are logged as names only.
+ */
+function describeShape(data: unknown): string {
+  if (data === null || data === undefined) return String(data);
+  if (typeof data !== "object") return `${typeof data} ${JSON.stringify(data).slice(0, 60)}`;
+  return Object.entries(data as Record<string, unknown>)
+    .map(([key, value]) => {
+      const quotaish = /week|hour|month|percent|quota|reset|window|usage|remain|total|credit/i.test(key);
+      if (quotaish && (typeof value !== "object" || value === null)) {
+        return `${key}=${JSON.stringify(value) ?? "?"}`;
+      }
+      return key;
+    })
+    .join(", ");
+}
+
 async function gatewayFetch(p: Page, api: string, data: Record<string, unknown>): Promise<GatewayResponse> {
   const body = await p.evaluate(
     async ({ gateway, api, data }) => {
@@ -222,6 +245,13 @@ export async function fetchAlibabaCoding(config: ProviderConfig): Promise<Provid
 
     const q = info.codingPlanQuotaInfo || {};
     const metrics: UsageMetric[] = [];
+    // The window set is whatever the vendor still reports; one that disappears
+    // is a vendor shape change, not a local defect (the 5h window went that
+    // way in Aug). If no window at all is reported, say so every poll until
+    // the shape is understood.
+    if (!["per5HourTotalQuota", "perWeekTotalQuota", "perBillMonthTotalQuota"].some((k) => Number(q[k]) > 0)) {
+      console.error(`[alibaba-coding] quota block has no window fields — payload: ${describeShape(q)}`);
+    }
     // The 5h bucket is a *trailing* window, not one that resets: its used count
     // both rises and falls (measured over 14 days of history), and its
     // "next refresh time" is always the server's current time rather than a
@@ -301,7 +331,16 @@ export function addonPoolMetric(
   const expiresAt = Number(addon?.nearestExpireTime);
 
   return metric("addon_credits", total - remaining, total, "credits", null, null, {
-    note: `extra usage packs${Number.isFinite(packs) ? ` (${packs} active)` : ""} — spent after the plan quota, and they expire rather than reset`,
+    note:
+      `extra usage packs${Number.isFinite(packs) ? ` (${packs} active)` : ""} — spent after the plan quota, and they expire rather than reset` +
+      // When no plan window is reported at all — the vendor reshaped the usage
+      // endpoint again — the pool is the card's only metric and would read as
+      // if it were the plan. Say what is missing rather than substitute
+      // silently. This is the one documented exception to "secondary never
+      // headlines a card": the fallback exists so a card is never headless.
+      (planMetrics.length
+        ? ""
+        : " — the plan's own quota is not currently reported by the vendor endpoint"),
     expiresAt: Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : null,
     coversUntil: resets.length ? Math.min(...resets) : null,
     ...(covered.length ? {} : { secondary: true }),
@@ -311,6 +350,52 @@ export function addonPoolMetric(
 /** Credits there are to spend. Packs with nothing left cover nothing. */
 function addonHasCredits(total: number, remaining: number): boolean {
   return Number.isFinite(total) && total > 0 && Number.isFinite(remaining) && remaining > 0;
+}
+
+/**
+ * The token plan's quota windows plus its extra-pack pool, from the two
+ * gateway payloads. Pure so the parsing is unit-testable — this is the part
+ * the vendor has reshaped twice.
+ *
+ * Percentages arrive as **0..1 fractions**. The window set is whatever the
+ * vendor currently reports, and absent fields are skipped: the 5h window was
+ * removed on 2026-08-06 (the payload kept only `per1Week*`, SOW-0008), and on
+ * 2026-09-22 the weekly window was replaced by a monthly one — captured live
+ * as `per1MonthPercentage` (same 0..1 fraction) with the reset in
+ * `per1MonthResetTime`. The reset key is derived from the percentage key so a
+ * future rename of one surfaces in the journal diagnostic rather than
+ * silently resetting to nothing.
+ */
+export function tokenPlanMetrics(
+  usage: Record<string, unknown> | null,
+  addonPool: Record<string, unknown> | null
+): { metrics: UsageMetric[]; hasWindow: boolean } {
+  const windows: Array<[string, string, string]> = [
+    ["5h_quota", "5h", "per5HourPercentage"],
+    ["monthly_quota", "monthly", "per1MonthPercentage"],
+  ];
+  const metrics: UsageMetric[] = [];
+  for (const [name, window, pctKey] of windows) {
+    const fraction = Number(usage?.[pctKey]);
+    if (!Number.isFinite(fraction)) continue;
+    const percent = fraction * 100;
+    // Only once it is actually spent: a window still being consumed is the
+    // real constraint, whether or not packs are held in reserve.
+    const spent = percent >= 100 && addonHasCredits(Number(addonPool?.totalCredits), Number(addonPool?.remainingCredits));
+    metrics.push(
+      metric(name, percent, 100, "%", window, usage?.[pctKey.replace(/Percentage$/, "ResetTime")] ?? null, {
+        ...(spent
+          ? { backstopped: true, note: "plan quota spent — usage now comes from the extra packs" }
+          : {}),
+      })
+    );
+  }
+  const hasWindow = metrics.length > 0;
+  // Built from the plan windows above, which already carry `backstopped` and
+  // their own reset times, so what the packs are covering is read off them.
+  const pool = addonPoolMetric(addonPool, metrics);
+  if (pool) metrics.push(pool);
+  return { metrics, hasWindow };
 }
 
 export async function fetchAlibabaToken(config: ProviderConfig): Promise<ProviderResult> {
@@ -329,35 +414,17 @@ export async function fetchAlibabaToken(config: ProviderConfig): Promise<Provide
       "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/addon/summary",
       {}
     );
-    const packPool = addon.ok ? (addon.data as Record<string, unknown> | null) : null;
-    const addonCovers = addonHasCredits(Number(packPool?.totalCredits), Number(packPool?.remainingCredits));
-
-    const metrics: UsageMetric[] = [];
-    // Percentages arrive as 0..1 fractions.
-    const windows: Array<[string, string, string, string]> = [
-      ["5h_quota", "5h", "per5HourPercentage", "per5HourResetTime"],
-      ["weekly_quota", "weekly", "per1WeekPercentage", "per1WeekResetTime"],
-    ];
-    for (const [name, window, pctKey, resetKey] of windows) {
-      const fraction = Number(usage.data[pctKey]);
-      if (!Number.isFinite(fraction)) continue;
-      const percent = fraction * 100;
-      // Only once it is actually spent: a window still being consumed is the
-      // real constraint, whether or not packs are held in reserve.
-      const spent = percent >= 100 && addonCovers;
-      metrics.push(
-        metric(name, percent, 100, "%", window, usage.data[resetKey] ?? null, {
-          ...(spent
-            ? { backstopped: true, note: "plan quota spent — usage now comes from the extra packs" }
-            : {}),
-        })
-      );
+    const { metrics, hasWindow } = tokenPlanMetrics(
+      usage.data,
+      addon.ok ? (addon.data as Record<string, unknown> | null) : null
+    );
+    // The usage endpoint was reshaped by the vendor twice (see
+    // tokenPlanMetrics), each time without an error — the poll succeeded and
+    // one metric quietly vanished. If no window at all is recognised, say so
+    // every poll until the shape is understood.
+    if (!hasWindow) {
+      console.error(`[alibaba-token] usage response has no window fields — payload: ${describeShape(usage.data)}`);
     }
-
-    // Built from the plan windows above, which already carry `backstopped` and
-    // their own reset times, so what the packs are covering is read off them.
-    const pool = addonPoolMetric(packPool, metrics);
-    if (pool) metrics.push(pool);
 
     const sub = await callGateway(config.id, "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/subscription", {
       queryInstanceInfoRequest: { commodityCode: "sfm_tokenplansolo_public_intl" },
