@@ -206,7 +206,7 @@ Reviewer findings:
 
 Same-failure scan:
 
-- `grep -rnE "nova|10\.20\.|@netdata|costa"` over every file in the commit: no host names, addresses or identities. `grep` for `console.(log|error)` printing tokens in `src/providers/xai.ts` and `src/login-xai.ts`: none.
+- An identifier grep — the deployment's host name, private address prefix, internal domain and username, all of which live only in the uncommitted `.env` — over every file in the commit: no host names, addresses or identities. `grep` for `console.(log|error)` printing tokens in `src/providers/xai.ts` and `src/login-xai.ts`: none.
 - Other providers with a credential file that rotates: only the browser profile, which already follows the single-holder rule (`CREDS.md`).
 
 Sensitive data gate:
