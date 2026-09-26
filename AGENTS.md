@@ -380,7 +380,12 @@ When unsure whether a change is needed, investigate first. When an authorized ch
 - Done: `.agents/sow/done/`
 - Specs: `.agents/sow/specs/`
 - Template for new SOWs: `.agents/sow/SOW.template.md`
-- Local audit: `.agents/sow/audit.sh`
+- Local audit: `.agents/sow/audit.sh` — SOW lifecycle plus a sensitive-data
+  gate: it scans the durable artifacts (pending, current, done, specs, root
+  docs) for secret-shaped patterns, and cross-checks every tracked file
+  against the concrete values in `.env` (hosts, usernames, keys) plus the
+  optional `AI_USAGE_AUDIT_IDENTIFIERS` list, so a deployment value quoted
+  into a committed file is caught even when it matches no generic pattern.
 
 Create new SOW files from `.agents/sow/SOW.template.md`. The template is project-local and may be customized for this repository.
 

@@ -71,8 +71,12 @@ sensitive_scan_files() {
   [ -f ./AGENTS.md.pre-sow.bak ] && printf '%s\n' ./AGENTS.md.pre-sow.bak
   [ -f ./SKILL.md ] && printf '%s\n' ./SKILL.md
   [ -f ./SOW-status.md ] && printf '%s\n' ./SOW-status.md
-  for sow_dir in ./.agents/sow/pending ./.agents/sow/current ./.agents/sow/specs; do
+  for sow_dir in ./.agents/sow/pending ./.agents/sow/current ./.agents/sow/done ./.agents/sow/specs; do
     [ -d "$sow_dir" ] && find "$sow_dir" -type f -name '*.md' 2>/dev/null
+  done
+  # Root operator/user-facing docs are durable artifacts too.
+  for f in README*.md CHANGELOG*.md CONTRIBUTING*.md CREDS*.md; do
+    [ -f "./$f" ] && printf './%s\n' "$f"
   done
   [ -d ./.agents/skills ] && find ./.agents/skills -type f \( -name '*.md' -o -name 'SKILL.md' -o -name '*.yaml' -o -name '*.yml' \) 2>/dev/null
   if [ "${SOW_AUDIT_SENSITIVE_FULL_HISTORY:-0}" = "1" ]; then
@@ -128,7 +132,12 @@ scan_sensitive_file() {
 
     if ($line =~ /\b(?:pass(?:word)?|passwd|pwd|api[_-]?key|secret|token|client[_-]?secret|private[_-]?key|access[_-]?key)\b\s*[:=]\s*["'\''`]?([^"'\''`\s<>{}\[\]&,]{8,})/i) {
       my $value = lc $1;
-      push @hits, "credential-assignment" unless $value =~ /^(redacted|example|placeholder|changeme|change-me|xxx|xxxx|null|none|your[_-]?|dummy|sample|fake|test)/ || $value =~ /^\$/ || $value =~ /^(config|settings|options|opts|env|process\.env|os\.environ)\./ || $value =~ /^[a-z_][a-z0-9_.]*(token|secret|key|password)[a-z0-9_.]*$/;
+      # A purely alphabetic value shorter than 16 characters is prose — the
+      # word "token:" in a sentence followed by the next word of the sentence
+      # ("Token: headline ...") — not a credential. Real secrets carry digits
+      # or punctuation, or are long.
+      my $is_prose_word = $value =~ /^[a-z]+$/ && length($value) < 16;
+      push @hits, "credential-assignment" unless $is_prose_word || $value =~ /^(redacted|example|placeholder|changeme|change-me|xxx|xxxx|null|none|your[_-]?|dummy|sample|fake|test)/ || $value =~ /^\$/ || $value =~ /^(config|settings|options|opts|env|process\.env|os\.environ)\./ || $value =~ /^[a-z_][a-z0-9_.]*(token|secret|key|password)[a-z0-9_.]*$/;
     }
 
     if ($line =~ /\b(?:snmp[_-]?)?(?:community|community[_-]?string|rocommunity|rwcommunity)\b\s*[:=]\s*["'\''`]?([^"'\''`\s<>{}\[\]]{3,})/i) {
@@ -156,6 +165,13 @@ scan_sensitive_file() {
       print "$ARGV:$.:$hit\n";
     }
   ' "$file" 2>/dev/null
+}
+
+# Tracked files plus untracked-but-not-ignored ones: a pre-commit gate must
+# also see the new file about to be added, while never seeing ignored runtime
+# state (.env, profiles, data/) — which is exactly where these values belong.
+scan_targets() {
+  { git ls-files -z 2>/dev/null; git ls-files -o --exclude-standard -z 2>/dev/null; } | sort -zu
 }
 
 # --- Marker check ---
@@ -510,6 +526,66 @@ else
 fi
 echo
 
+# --- .env cross-check ---
+# Every deployment-specific value — host names, addresses, usernames, domains,
+# secrets — must live only in .env, which is never committed. Grep every
+# tracked file for those concrete values: a value quoted into a durable
+# artifact (a SOW's audit note, a spec, a code comment) matches no generic
+# secret pattern, but it does match the value it was copied from. Findings are
+# reported as file:line plus the .env key they came from; the value itself is
+# never printed. Values that .env.example already carries (placeholder names,
+# documented defaults) are public by design and are skipped, as are pure
+# integers and booleans. AI_USAGE_AUDIT_IDENTIFIERS in .env lists extra
+# deployment identifiers that are not .env values themselves (an address
+# prefix, a username), comma-separated.
+echo "${BLUE}-- .env cross-check --${NC}"
+env_cross_findings=0
+env_values_checked=0
+if [ -f ./.env ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  example_text=$(cat ./.env.example 2>/dev/null || true)
+  extra_values=""
+  if grep -q '^AI_USAGE_AUDIT_IDENTIFIERS=' ./.env 2>/dev/null; then
+    extra_values="$(grep -E '^AI_USAGE_AUDIT_IDENTIFIERS=' ./.env | head -1 | cut -d= -f2- | tr -d "\"'" | tr ',' '\n')"
+  fi
+  while IFS=$'\t' read -r key value; do
+    [ -z "$key" ] && [ -z "$value" ] && continue
+    case "$value" in
+      \"*\") value=${value#\"}; value=${value%\"} ;;
+      \'*\') value=${value#\'}; value=${value%\'} ;;
+    esac
+    [ -z "$value" ] && continue
+    case "$value" in *[!0-9]*) ;; *) continue ;; esac
+    case "$value" in [Tt]rue|[Ff]alse|[Yy]es|[Nn]o|none|null|changeme|change-me) continue ;; esac
+    [ ${#value} -lt 3 ] && continue
+    if [ -n "$example_text" ] && printf '%s\n' "$example_text" | grep -qwF -- "$value" 2>/dev/null; then
+      continue
+    fi
+    env_values_checked=$((env_values_checked + 1))
+    if [ ${#value} -lt 8 ]; then
+      hits=$(scan_targets | xargs -0 -r grep -InwiF -e "$value" -- 2>/dev/null | cut -d: -f1,2)
+    else
+      hits=$(scan_targets | xargs -0 -r grep -IniF -e "$value" -- 2>/dev/null | cut -d: -f1,2)
+    fi
+    if [ -n "$hits" ]; then
+      while IFS= read -r loc; do
+        [ -z "$loc" ] && continue
+        echo "  ${RED}--${NC}  $loc: committed text matches the .env value of ${key} (redact; value not shown)"
+        env_cross_findings=$((env_cross_findings + 1))
+      done <<< "$hits"
+    fi
+  done < <(awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ && $1 !~ /^AI_USAGE_AUDIT_IDENTIFIERS$/ { v=substr($0, index($0,"=")+1); gsub(/^[ \t]+|[ \t]+$/, "", v); if (v != "") print $1 "\t" v }' ./.env; [ -n "$extra_values" ] && printf '%s\n' "$extra_values" | sed 's/^/AI_USAGE_AUDIT_IDENTIFIERS\t/')
+  if [ "$env_values_checked" -eq 0 ]; then
+    echo "  ${GRAY}(no checkable .env values; .env.example defaults excluded)${NC}"
+  elif [ "$env_cross_findings" -eq 0 ]; then
+    echo "  ${GREEN}OK${NC}  cross-checked $env_values_checked deployment value(s) from .env against tracked files; no identifiers or secrets committed"
+  else
+    echo "  ${RED}--${NC}  $env_cross_findings committed hit(s) on .env deployment value(s). Redact before commit; values are not shown."
+  fi
+else
+  echo "  ${GRAY}(no .env; deployment-identifier cross-check skipped)${NC}"
+fi
+echo
+
 # --- Project skills ---
 echo "${BLUE}-- runtime project skills --${NC}"
 project_skills_ok=0
@@ -625,13 +701,13 @@ skill_classification_warnings=${non_project_skills_unclassified:-0}
 
 sow_status_errors=$((sow_status_mismatch + sow_status_missing))
 pre_impl_errors=$((sow_template_pre_impl_missing + current_sow_pre_impl_missing))
-sensitive_gate_errors=$((sow_template_sensitive_gate_missing + current_sow_sensitive_gate_missing + sensitive_findings))
+sensitive_gate_errors=$((sow_template_sensitive_gate_missing + current_sow_sensitive_gate_missing + sensitive_findings + env_cross_findings))
 open_source_reference_errors=${sow_template_open_source_reference_missing:-0}
 completion_rule_errors=${sow_template_completion_rule_missing:-0}
 sow_evidence_errors=$((regression_order_violations + mirror_path_violations + open_source_reference_errors + completion_rule_errors))
 
-if [ "$sensitive_findings" -gt 0 ]; then
-  echo "  ${RED}=== CRITICAL: sensitive data patterns found in durable artifacts. Redact before commit. ===${NC}"
+if [ "$sensitive_findings" -gt 0 ] || [ "$env_cross_findings" -gt 0 ]; then
+  echo "  ${RED}=== CRITICAL: sensitive data or deployment identifiers found in tracked files. Redact before commit. ===${NC}"
   exit 2
 fi
 
@@ -660,6 +736,7 @@ elif $initialized; then
   [ "$sow_template_sensitive_gate_missing" -gt 0 ] && echo "    ${YELLOW}- project-local SOW template missing sensitive data gates${NC}"
   [ "$current_sow_sensitive_gate_missing" -gt 0 ] && echo "    ${YELLOW}- ${current_sow_sensitive_gate_missing} current SOW(s) missing sensitive data handling/gate${NC}"
   [ "$sensitive_findings" -gt 0 ] && echo "    ${YELLOW}- ${sensitive_findings} sensitive-data finding(s) in durable artifacts${NC}"
+  [ "$env_cross_findings" -gt 0 ] && echo "    ${YELLOW}- ${env_cross_findings} committed hit(s) on .env deployment value(s)${NC}"
   [ "${sow_template_open_source_reference_missing:-0}" -gt 0 ] && echo "    ${YELLOW}- project-local SOW template missing open-source reference evidence field${NC}"
   [ "${sow_template_completion_rule_missing:-0}" -gt 0 ] && echo "    ${YELLOW}- project-local SOW template missing completed-status or one-commit close rule${NC}"
   [ "$regression_order_violations" -gt 0 ] && echo "    ${YELLOW}- ${regression_order_violations} SOW file(s) have regression sections before original outcome/lessons/follow-up${NC}"
