@@ -447,8 +447,11 @@ function renderProviders(){
   const el=document.getElementById('providers');
   let healthy=0,warn=0,crit=0,live=0; nextReset=null;
   const ordered=providersData.map((p,i)=>({p,i})).sort((a,b)=>cardRank(b.p)-cardRank(a.p)||a.i-b.i).map(x=>x.p);
-  const html=ordered.map((p,i)=>{
-    const accent=colorFor(p.id); const lf=p.lastFetch; const settled=firstBuildDone?' settled':'';
+  // Each card is built in its own frame: a throw in one card degrades that
+  // card to the down template instead of blanking the page. Reached for real
+  // when an unsubscribed plan polled OK with zero metrics (2026-10-14).
+  const card=(p,accent,settled)=>{
+    const lf=p.lastFetch;
     if(p.parked){
       return `<div class="card down${settled}" style="--accent:${accent}">
         <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span><b>${esc(p.name)}</b></div>
@@ -464,6 +467,18 @@ function renderProviders(){
         <div style="display:flex;gap:8px;align-items:center">${lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:''}
         <span class="status-chip down"><span class="dot down"></span>down</span></div></div>
         <div class="err-msg">⚠ ${esc(lf.error)}</div></div>`;
+    }
+    // A poll that succeeded but carried no quota windows is not an "ok" card:
+    // the vendor stopped serving the numbers (an unsubscribed plan, or a
+    // reshaped response — the fetcher logs the shape every poll). Rendering
+    // it as down also keeps the normal path free of an empty metrics list,
+    // which has no headline window to describe.
+    if(!lf.metrics||!lf.metrics.length){ crit++;
+      return `<div class="card down${settled}" style="--accent:${accent}">
+        <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span><b>${esc(p.name)}</b></div>
+        <div style="display:flex;gap:8px;align-items:center">${lf.plan?`<span class="plan-badge">${esc(lf.plan)}</span>`:''}
+        <span class="status-chip down"><span class="dot down"></span>down</span></div></div>
+        <div class="err-msg">⚠ poll succeeded but the vendor reported no quota windows</div></div>`;
     }
     live++;
     const prim=headlineMetric(p,lf.metrics); const mode=paygMode(p);
@@ -486,7 +501,7 @@ function renderProviders(){
       const bigUnit=pct===null?(prim?prim.unit:''):'%';
       // Named once per card: the burn line below carries the window, and it can
       // name a metric that has no `window` at all, which this caption cannot.
-      const wcap=(p.risk&&p.risk.binding)?'':(prim.window?' · '+prim.window:'');
+      const wcap=(p.risk&&p.risk.binding)?'':(prim&&prim.window?' · '+prim.window:'');
       const side=prim&&prim.used!==null?`<div class="big-used">${fmtNum(prim.used)} used</div><div class="big-total">of ${fmtNum(prim.total)} ${prim.unit}${wcap}</div>`:`<div class="big-used">available</div><div class="big-total">${prim?prim.unit:''}${prim&&prim.window?' · '+prim.window:' · balance'}</div>`;
       // Coloured by risk, not by how full it is: a green 41% beside an "at risk"
       // chip is read as green. The risk never reads better than the fill level,
@@ -520,6 +535,15 @@ function renderProviders(){
       <div class="trend" data-trend="${p.id}"></div>
       <div class="card-foot"><span class="reset"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>${resetSpan}</span></div>
       ${subHtml}</div>`;
+  };
+  const html=ordered.map((p,i)=>{ const accent=colorFor(p.id); const settled=firstBuildDone?' settled':'';
+    try{ return card(p,accent,settled); }
+    catch(e){ console.error('card render failed:',p.id,e); crit++;
+      return `<div class="card down${settled}" style="--accent:${accent}">
+        <div class="card-top"><div class="pname"><span class="pdot" style="background:var(--down);box-shadow:none"></span><b>${esc(p.name)}</b></div>
+        <span class="status-chip down"><span class="dot down"></span>down</span></div>
+        <div class="err-msg">⚠ card render error: ${esc(String((e&&e.message)||e))}</div></div>`;
+    }
   }).join('');
   el.innerHTML=html;
   firstBuildDone=true;

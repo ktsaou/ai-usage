@@ -44,7 +44,8 @@
       "type": "alibaba-coding",
       "name": "Alibaba Coding Pro",
       "env": {},
-      "playwright": true
+      "playwright": true,
+      "parked": true
     },
     {
       "id": "alibaba-token",
