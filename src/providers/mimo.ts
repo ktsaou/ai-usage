@@ -1,6 +1,6 @@
 import type { Page } from "patchright";
 import type { ProviderConfig, ProviderResult, UsageMetric } from "../types.js";
-import { result, metric } from "./common.js";
+import { result, metric, withTransportRetry } from "./common.js";
 import { getPage } from "./browser.js";
 import { SESSION_EXPIRED } from "./alibaba.js";
 
@@ -17,13 +17,15 @@ async function apiFetch(p: Page, path: string): Promise<ApiResponse> {
   // would be cross-origin. Report that as an auth failure, not a fetch crash.
   if (!p.url().startsWith(ORIGIN)) return { status: 401, body: null };
 
-  return p.evaluate(async ({ origin, path }) => {
-    const res = await fetch(`${origin}${path}`, {
-      credentials: "include",
-      headers: { Accept: "application/json" },
-    });
-    return { status: res.status, body: await res.json().catch(() => null) };
-  }, { origin: ORIGIN, path });
+  return withTransportRetry(`mimo ${path}`, () =>
+    p.evaluate(async ({ origin, path }) => {
+      const res = await fetch(`${origin}${path}`, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      return { status: res.status, body: await res.json().catch(() => null) };
+    }, { origin: ORIGIN, path })
+  );
 }
 
 function loggedOut(res: ApiResponse): boolean {

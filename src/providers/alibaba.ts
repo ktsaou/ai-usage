@@ -1,6 +1,6 @@
 import type { Page } from "patchright";
 import type { ProviderConfig, ProviderResult, SubscriptionInfo, UsageMetric } from "../types.js";
-import { result, metric } from "./common.js";
+import { result, metric, withTransportRetry } from "./common.js";
 import { getPage } from "./browser.js";
 
 const CONSOLE_URL =
@@ -119,7 +119,7 @@ function describeShape(data: unknown): string {
 }
 
 async function gatewayFetch(p: Page, api: string, data: Record<string, unknown>): Promise<GatewayResponse> {
-  const body = await p.evaluate(
+  const body = await withTransportRetry(`alibaba ${api}`, () => p.evaluate(
     async ({ gateway, api, data }) => {
       const secToken = document.cookie.match(/sec_token=([^;]+)/)?.[1] || "";
       const params = JSON.stringify({
@@ -150,7 +150,7 @@ async function gatewayFetch(p: Page, api: string, data: Record<string, unknown>)
       return res.json().catch(() => null);
     },
     { gateway: GATEWAY, api, data }
-  );
+  ));
 
   // The gateway answers 200 even when logged out; the session state is in the
   // error code, not in an HTTP status or a redirect.

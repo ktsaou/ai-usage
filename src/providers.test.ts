@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { addonPoolMetric, tokenPlanMetrics } from "./providers/alibaba.js";
+import { isTransportFailure, briefError, withTransportRetry } from "./providers/common.js";
 import { computeProviderRisk, type RiskHistory } from "./risk.js";
 import type { ProviderResult, UsageMetric } from "./types.js";
 
@@ -157,4 +158,77 @@ test("the pool's note names the missing plan quota only while no window is repor
     .metrics.find((m) => m.name === "addon_credits")!;
   assert.equal(withWindow.note!.includes("not currently reported"), false);
   assert.match(withWindow.note!, /5 active/);
+});
+
+// --- Transport retry (SOW-0019) -------------------------------------------
+
+const STACK =
+  "page.evaluate: TypeError: Failed to fetch" +
+  "    at eval (eval at evaluate (:303:30), <anonymous>:1:455)" +
+  "    at UtilityScript.evaluate (<anonymous>:305:16)";
+
+test("the transport classifier matches fetch-level rejections only", () => {
+  assert.equal(isTransportFailure(STACK), true);
+  assert.equal(isTransportFailure("net::ERR_CONNECTION_RESET"), true);
+  assert.equal(isTransportFailure("fetch failed"), true);
+  assert.equal(isTransportFailure("session expired and automatic sign-in did not restore it"), false);
+  assert.equal(isTransportFailure("gateway error"), false);
+  assert.equal(isTransportFailure("no token plan quota in response"), false);
+});
+
+test("briefError trims playwright stack frames and keeps plain messages", () => {
+  assert.equal(briefError(STACK), "page.evaluate: TypeError: Failed to fetch");
+  assert.equal(
+    briefError("session expired and automatic sign-in did not restore it — run `npm run login`"),
+    "session expired and automatic sign-in did not restore it — run `npm run login`"
+  );
+  // multi-line stacks never leak a second line into the stored text
+  assert.equal(briefError("boom\n    at thing.ts:1:2\n    at more.ts:3:4"), "boom");
+});
+
+test("withTransportRetry repeats a transport failure once and heals", async () => {
+  let calls = 0;
+  const out = await withTransportRetry(
+    "test",
+    async () => {
+      calls++;
+      if (calls === 1) throw Object.assign(new Error(STACK), { name: "TypeError" });
+      return "ok";
+    },
+    { backoffMs: 0 }
+  );
+  assert.equal(out, "ok");
+  assert.equal(calls, 2);
+});
+
+test("withTransportRetry never repeats a non-transport error", async () => {
+  let calls = 0;
+  await assert.rejects(
+    withTransportRetry(
+      "test",
+      async () => {
+        calls++;
+        throw new Error("Login.NotLogined");
+      },
+      { backoffMs: 0 }
+    ),
+    /Login.NotLogined/
+  );
+  assert.equal(calls, 1);
+});
+
+test("withTransportRetry gives up after the single repeat", async () => {
+  let calls = 0;
+  await assert.rejects(
+    withTransportRetry(
+      "test",
+      async () => {
+        calls++;
+        throw new Error(STACK);
+      },
+      { backoffMs: 0 }
+    ),
+    /Failed to fetch/
+  );
+  assert.equal(calls, 2);
 });

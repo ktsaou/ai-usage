@@ -191,6 +191,13 @@ before changing anything under `src/providers/browser.ts`, `mimo.ts`,
   the tab reporting the right URL while the live document is the browser's error
   page, whose origin is opaque; every cookie read then throws `SecurityError`
   forever, because nothing re-navigates a tab whose URL looks correct.
+- In-page quota fetches retry once on transport failure (`Failed to fetch`,
+  `net::ERR_…`, `fetch failed`): chromium's pooled sockets and cached DNS go
+  stale across the ~60s idle between polls, and one hiccup must not cost a
+  whole poll cycle. Only the transport class repeats — auth, shape and
+  gateway errors propagate untouched so the logged-out and relogin paths
+  stay authoritative. Stored failure text (tiles, `/api/providers`, the MCP)
+  is trimmed of Playwright stack frames; the journal keeps the full error.
 
 ### Session models differ per provider — check before assuming
 

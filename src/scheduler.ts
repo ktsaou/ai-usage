@@ -1,5 +1,6 @@
 import type { AppConfig, ProviderResult } from "./types.js";
 import { fetchProvider } from "./providers/fetch.js";
+import { briefError } from "./providers/common.js";
 import { DB } from "./db.js";
 import { computeProviderRisk, type ProviderRisk } from "./risk.js";
 
@@ -80,7 +81,9 @@ export class Scheduler {
       const prev = this.failures.get(providerId);
       this.failures.set(providerId, {
         count: (prev?.count ?? 0) + 1,
-        error: result.error,
+        // Tiles, /api/providers and the MCP read this text; the console line
+        // below keeps the full stack for debugging.
+        error: briefError(result.error),
         at: result.fetchedAt,
       });
       console.error(`[scheduler] ${providerId}: ERROR ${result.error}`);
